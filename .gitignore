@@ -25,6 +25,7 @@ build/
 # 部署与本地配置
 .env
 deploy/.env
+scripts/deploy.local.json
 *.log
 
 # 本地数据库

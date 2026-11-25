@@ -1,0 +1,14 @@
+{
+  "client": {
+    "ssh": "openwrt",
+    "user": "",
+    "port": null,
+    "key": ""
+  },
+  "server": {
+    "host": "vps.example.com",
+    "user": "root",
+    "port": 22,
+    "key": "C:/Users/you/.ssh/id_ed25519"
+  }
+}
