@@ -10,6 +10,6 @@
     "./styles/tokens.scss": "./src/styles/tokens.scss"
   },
   "dependencies": {
-    "vue": "^3.5.13"
+    "vue": "^3.5.46"
   }
 }

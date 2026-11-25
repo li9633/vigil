@@ -10,15 +10,16 @@
   },
   "dependencies": {
     "@vigil/shared": "*",
-    "element-plus": "^2.9.1",
-    "pinia": "^2.3.0",
-    "vue": "^3.5.13",
-    "vue-router": "^4.5.0"
+    "echarts": "6.1.0",
+    "element-plus": "^2.14.8",
+    "pinia": "^4.1.0",
+    "vue": "^3.5.46",
+    "vue-router": "^5.5.1"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.2.1",
-    "sass": "~1.83.0",
-    "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "@vitejs/plugin-vue": "^6.0.11",
+    "sass": "~1.108.2",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.8"
   }
 }
