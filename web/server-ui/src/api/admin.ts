@@ -1,4 +1,4 @@
-import { api, type AdminLoginRequest, type AdminLoginResponse, type Client, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview } from '@vigil/shared'
+import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type Client, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
 
 export interface IncidentQuery {
   state?: string
@@ -56,4 +56,18 @@ export const adminApi = {
     api.get<{ records: NotificationRecord[] }>('/api/v1/admin/notifications/records', {
       query: { limit },
     }),
+
+  logs: (query: ServerLogQuery = {}) =>
+    api.get<ListResponse<ServerLogEntry>>('/api/v1/admin/logs', { query: { ...query } }),
+
+  logsExportUrl: (query: ServerLogQuery = {}) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value))
+      }
+    }
+    const suffix = params.toString()
+    return `${getApiConfig().baseURL}/api/v1/admin/logs/export${suffix ? `?${suffix}` : ''}`
+  },
 }

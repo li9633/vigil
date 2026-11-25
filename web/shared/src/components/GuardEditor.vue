@@ -35,7 +35,7 @@ const emit = defineEmits<{
   save: [guards: GuardDefinition[]]
 }>()
 
-const PROBES = ['carrier', 'pppoe', 'route', 'dns', 'http', 'process', 'port']
+const PROBES = ['carrier', 'pppoe', 'route', 'dns', 'http', 'process', 'port', 'script']
 const ACTIONS = ['ifup_wan', 'restart_service']
 const MODES = [
   { value: 'dependency_tree', label: '依赖树（默认）' },

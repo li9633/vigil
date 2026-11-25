@@ -416,26 +416,142 @@ export interface ActionExecuteResponse {
   message?: string | null
 }
 
-/** 模块清单（模块管理页面） */
-export interface ModuleInfo {
+/** 内置探测器信息 */
+export interface ProbeInfo {
   id: string
-  type: 'builtin' | 'external' | string
-  enabled: boolean
-  interval?: number | null
-  timeout?: number | null
-  depends_on?: string[]
-  risk?: string
-  params?: Record<string, unknown>
-  hash?: string | null
-  source?: string | null
+  name?: string | null
+  description?: string | null
+  params?: string[]
 }
 
-/** 客户端日志 */
+/** 脚本探测器校验结果 */
+export interface ScriptProbeInfo {
+  name: string
+  file: string
+  sha256?: string | null
+  actual_sha256?: string | null
+  timeout?: number | null
+  valid: boolean
+  error?: string | null
+}
+
+export interface ScriptProbeInventory {
+  directory: string
+  manifest: string
+  directory_ok: boolean
+  manifest_exists?: boolean
+  error?: string
+  scripts: ScriptProbeInfo[]
+  unregistered: string[]
+}
+
+/** 模块清单（GET /api/modules） */
+export interface ModulesResponse {
+  builtin: ProbeInfo[]
+  scripts: ScriptProbeInventory
+}
+
+export interface ScriptImportResponse {
+  ok: boolean
+  script: ScriptProbeInfo
+  modules: ModulesResponse
+}
+
+export interface ScriptDeleteResponse {
+  ok: boolean
+  modules: ModulesResponse
+}
+
+/** 客户端结构化日志（GET /api/logs） */
+export interface LogGuardRef {
+  id?: string
+  name?: string
+  template?: string
+}
+
 export interface LogEntry {
+  v?: number
   ts: string
+  uptime_ms?: number
+  seq?: number
   level: string
-  module?: string | null
-  message: string
+  origin?: string
+  event: string
+  logger?: string
+  msg: string
+  client_id?: string
+  boot_id?: string
+  trace_id?: string
+  recovery_id?: string
+  guard?: LogGuardRef
+  check?: { id?: string; probe?: string }
+  action?: {
+    name?: string
+    target?: string | null
+    result?: string | null
+    exit_code?: number | null
+  }
+  status?: string
+  from?: string
+  to?: string
+  check_status?: string
+  failure_count?: number
+  recovered?: boolean
+  skipped?: boolean
+  duration_ms?: number | null
+  attempt?: number
+  suppressed?: number
+  evidence?: unknown
+  err?: { type?: string; stack?: string }
+  [key: string]: unknown
+}
+
+/** 日志过滤条件 */
+export interface LogQuery {
+  limit?: number
+  level?: string
+  event?: string
+  guard_id?: string
+  since?: number
+}
+
+/** 服务端结构化日志（GET /api/v1/admin/logs） */
+export interface ServerLogEntry {
+  v?: number
+  ts: string
+  uptime_ms?: number
+  seq?: number
+  level: string
+  origin?: string
+  instance?: string
+  event: string
+  logger?: string
+  msg: string
+  request_id?: string
+  actor?: string
+  client_id?: string
+  incident_id?: number | string
+  guard_id?: string
+  guard_name?: string
+  method?: string
+  path?: string
+  status?: number
+  duration_ms?: number | null
+  channel?: string
+  kind?: string
+  evidence?: unknown
+  err?: { type?: string; stack?: string }
+  [key: string]: unknown
+}
+
+export interface ServerLogQuery {
+  limit?: number
+  level?: string
+  event?: string
+  client_id?: string
+  request_id?: string
+  instance?: string
+  since?: number
 }
 
 /** 客户端本地设置 */
@@ -446,6 +562,46 @@ export interface ClientSettings {
   action?: Record<string, unknown>
   maintenance_window?: string | null
   version?: string | null
+}
+
+/** 客户端运行设置快照（GET /api/settings） */
+export interface ClientSettingsSnapshot {
+  version: string
+  protocol_version?: number | string
+  config_path?: string
+  server: {
+    base_url: string
+    client_id?: string
+    registered: boolean
+    heartbeat_interval: number
+    config_poll_interval: number
+    verify_tls: boolean
+  }
+  action_safety: {
+    global_enabled: boolean
+    max_risk_level: string
+    max_actions_per_hour: number
+    allowed_services: string[]
+  }
+  maintenance: {
+    active: boolean
+    until: number
+    remaining_seconds: number
+  }
+  guards_source?: string
+  generated_at?: number
+}
+
+/** 客户端设置更新请求（PUT /api/settings） */
+export interface ClientSettingsUpdate {
+  server?: { base_url: string }
+  heartbeat_interval?: number
+  action_safety?: {
+    global_enabled?: boolean
+    max_risk_level?: string
+    max_actions_per_hour?: number
+  }
+  maintenance_minutes?: number
 }
 
 /** 客户端登录（POST /api/login） */

@@ -14,6 +14,7 @@ const items: NavItem[] = [
   { to: '/notifications', label: '通知配置', milestone: 'M2' },
   { to: '/settings', label: '策略配置', milestone: 'M3' },
   { to: '/audit', label: '审计日志', milestone: 'M3' },
+  { to: '/logs', label: '服务端日志' },
 ]
 
 const route = useRoute()

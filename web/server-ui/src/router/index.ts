@@ -64,6 +64,12 @@ const router = createRouter({
           component: () => import('@/views/AuditView.vue'),
           meta: { title: '审计日志' },
         },
+        {
+          path: 'logs',
+          name: 'logs',
+          component: () => import('@/views/LogsView.vue'),
+          meta: { title: '服务端日志' },
+        },
       ],
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },

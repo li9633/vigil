@@ -1,13 +1,21 @@
 import {
   api,
+  getApiConfig,
   type ActionExecuteResponse,
   type CheckItem,
   type ClientEvent,
   type ClientLoginRequest,
   type ClientStatusSnapshot,
+  type ClientSettingsSnapshot,
+  type ClientSettingsUpdate,
   type GuardConfigResponse,
   type GuardDefinition,
   type ListResponse,
+  type LogEntry,
+  type LogQuery,
+  type ModulesResponse,
+  type ScriptDeleteResponse,
+  type ScriptImportResponse,
 } from '@vigil/shared'
 
 export const clientApi = {
@@ -23,7 +31,34 @@ export const clientApi = {
   saveGuards: (guards: GuardDefinition[]) =>
     api.put<GuardConfigResponse>('/api/guards', { guards }),
 
+  modules: () => api.get<ModulesResponse>('/api/modules'),
+
+  importScript: (payload: { name: string; content: string; timeout?: number }) =>
+    api.post<ScriptImportResponse>('/api/modules/script', payload),
+
+  deleteScript: (name: string) =>
+    api.post<ScriptDeleteResponse>('/api/modules/script/delete', { name }),
+
+  settings: () => api.get<ClientSettingsSnapshot>('/api/settings'),
+
+  saveSettings: (payload: ClientSettingsUpdate) =>
+    api.put<ClientSettingsSnapshot>('/api/settings', payload),
+
   events: (limit = 100) => api.get<ListResponse<ClientEvent>>('/api/events', { query: { limit } }),
+
+  logs: (query: LogQuery = {}) =>
+    api.get<ListResponse<LogEntry>>('/api/logs', { query: { ...query } }),
+
+  logsExportUrl: (query: LogQuery = {}) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value))
+      }
+    }
+    const suffix = params.toString()
+    return `${getApiConfig().baseURL}/api/logs/export${suffix ? `?${suffix}` : ''}`
+  },
 
   runAction: (name: string, target?: string) =>
     api.post<ActionExecuteResponse>(
