@@ -75,14 +75,17 @@ class ActionExecutor:
         use_lock=True,
     ):
         action_cfg = config.get("action") or {}
+        safety = config.get("action_safety") or {}
         storage = config.get("storage") or {}
         detect_cfg = config.get("detect") or {}
 
         self.config = config
-        self.enabled = bool(action_cfg.get("enabled", True))
-        self.max_level = str(action_cfg.get("max_level", "L1"))
+        self.enabled = bool(safety.get("global_enabled", action_cfg.get("enabled", True)))
+        self.max_level = str(safety.get("max_risk_level", action_cfg.get("max_level", "L1")))
         self.cooldown_seconds = int(action_cfg.get("cooldown_seconds", 300))
-        self.max_per_hour = int(action_cfg.get("max_per_hour", 3))
+        self.max_per_hour = int(
+            safety.get("max_actions_per_hour", action_cfg.get("max_per_hour", 3))
+        )
         self.allowed_services = list(action_cfg.get("allowed_services") or [])
         self.action_timeout = int(action_cfg.get("timeout", 30))
         self.wan_interface = str(detect_cfg.get("wan_interface") or "wan")

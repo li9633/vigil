@@ -37,15 +37,16 @@ def _extract_address(output):
 
 
 def detect(ctx):
-    domain = str(ctx.detect.get("dns_probe") or "www.baidu.com")
+    domain = str(ctx.param("name", ctx.detect.get("dns_probe") or "www.baidu.com"))
+    server = str(ctx.param("server", "127.0.0.1"))
     timeout = ctx.timeout
     started = ctx.clock()
-    result = ctx.runner.run(["nslookup", domain, "127.0.0.1"], timeout=timeout)
+    result = ctx.runner.run(["nslookup", domain, server], timeout=timeout)
     latency_ms = int((ctx.clock() - started) * 1000)
 
     base_evidence = {
         "domain": domain,
-        "server": "127.0.0.1",
+        "server": server,
         "timeout_seconds": timeout,
     }
 

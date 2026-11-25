@@ -1,22 +1,27 @@
 """配置加载、环境变量覆盖与校验。
 
-配置文件默认位于 /etc/vigil/config.json。缺省值按设计文档第 3.6 节与第 13 章，
+配置文件默认位于 /etc/vigil/config.json。缺省值按设计文档第 3.2-3.8 节与第 13 章，
 另补充 httpd / storage 等运行所需配置。所有键都支持通过环境变量覆盖，便于
-安装脚本与排障时临时调整。
+安装脚本与排障时临时调整。旧版 schema 1 配置会在加载时自动迁移为 schema 2。
 """
 
 import copy
 import json
+import logging
 import os
 import tempfile
 from urllib.parse import urlsplit
+
+from .guards.model import migrate_config, validate_guards
+
+LOGGER = logging.getLogger(__name__)
 
 # 默认配置文件路径
 DEFAULT_CONFIG_PATH = "/etc/vigil/config.json"
 
 # 缺省配置：与设计文档保持一致，额外补充运行所需字段
 DEFAULT_CONFIG = {
-    "schema_version": 1,
+    "schema_version": 2,
     "server": {
         "base_url": "",
         "client_id": "",
@@ -26,6 +31,7 @@ DEFAULT_CONFIG = {
         "config_poll_interval": 300,
         "verify_tls": True,
     },
+    "guards": [],
     "detect": {
         "wan_device": "auto",
         "wan_interface": "wan",
@@ -175,8 +181,8 @@ def validate_config(cfg):
 
     errors = []
 
-    if cfg.get("schema_version") != 1:
-        errors.append("schema_version 必须为 1")
+    if cfg.get("schema_version") not in (1, 2):
+        errors.append("schema_version 必须为 1 或 2")
 
     server = cfg.get("server")
     if not isinstance(server, dict):
@@ -283,16 +289,21 @@ def validate_config(cfg):
     elif not isinstance(agent.get("name", ""), str):
         errors.append("agent.name 必须是字符串")
 
+    if cfg.get("schema_version") == 2 or "guards" in cfg:
+        validate_guards(cfg, errors)
+
     if errors:
         raise ConfigError("；".join(errors))
     return cfg
 
 
-def load_config(path=None, env=None):
+def load_config(path=None, env=None, persist_migration=True):
     """加载配置：缺省值 + 文件 + 环境变量，最后做校验。
 
     path 为空时依次取参数、环境变量 VIGIL_CONFIG、默认路径。
     文件不存在时使用缺省值；文件存在但 JSON 非法时抛 ConfigError。
+    文件仍为 schema 1（或缺少 guards）时，迁移后的结果会回写磁盘（不含环境变量
+    覆盖，避免把临时密钥固化到配置文件）；回写失败只记录告警，不影响启动。
     """
     if env is None:
         env = os.environ
@@ -300,6 +311,8 @@ def load_config(path=None, env=None):
         path = env.get("VIGIL_CONFIG") or DEFAULT_CONFIG_PATH
 
     cfg = default_config()
+    file_cfg = default_config()
+    needs_persist = False
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as handle:
@@ -311,9 +324,21 @@ def load_config(path=None, env=None):
         if not isinstance(data, dict):
             raise ConfigError("配置文件根节点必须是 JSON 对象")
         _deep_merge(cfg, data)
+        _deep_merge(file_cfg, data)
+        needs_persist = data.get("schema_version") != 2 or "guards" not in data
 
     apply_env(cfg, env)
+    migrate_config(cfg)
     validate_config(cfg)
+
+    if needs_persist and persist_migration:
+        migrate_config(file_cfg)
+        try:
+            validate_config(file_cfg)
+            save_config(file_cfg, path)
+            LOGGER.info("配置已迁移到 schema 2 并回写：%s", path)
+        except (ConfigError, OSError) as exc:
+            LOGGER.warning("配置迁移回写失败，继续使用内存配置：%s", exc)
     return cfg
 
 

@@ -56,7 +56,13 @@ def urllib_probe(url, timeout):
 
 
 def detect(ctx):
-    probes = ctx.detect.get("http_probes") or []
+    configured = ctx.param("url", ctx.detect.get("http_probes") or [])
+    if isinstance(configured, str):
+        probes = [configured]
+    elif isinstance(configured, list):
+        probes = configured
+    else:
+        probes = []
     timeout = ctx.timeout
 
     if not probes:

@@ -13,12 +13,13 @@ from vigil_agent.config import (
     save_config,
     validate_config,
 )
+from vigil_agent.guards.model import migrate_config
 
 
 class ConfigDefaultsTest(unittest.TestCase):
     def test_defaults_match_design(self):
         cfg = default_config()
-        self.assertEqual(cfg["schema_version"], 1)
+        self.assertEqual(cfg["schema_version"], 2)
         self.assertEqual(cfg["server"]["base_url"], "")
         self.assertEqual(cfg["server"]["heartbeat_interval"], 30)
         self.assertTrue(cfg["server"]["verify_tls"])
@@ -40,7 +41,7 @@ class ConfigDefaultsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "missing.json")
             cfg = load_config(path, env={})
-        self.assertEqual(cfg, default_config())
+        self.assertEqual(cfg, migrate_config(default_config()))
 
     def test_file_overrides_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -204,6 +205,54 @@ class ConfigSaveTest(unittest.TestCase):
         self.assertEqual(loaded["server"]["client_id"], "cl_saved")
         self.assertEqual(loaded["server"]["secret"], "shh")
         self.assertEqual(loaded["httpd"]["port"], 8787)
+
+    def test_schema1_file_is_migrated_and_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "schema_version": 1,
+                        "server": {"client_id": "cl_legacy"},
+                        "action": {"max_per_hour": 5},
+                    },
+                    handle,
+                )
+            cfg = load_config(path, env={})
+            self.assertEqual(cfg["schema_version"], 2)
+            with open(path, "r", encoding="utf-8") as handle:
+                persisted = json.load(handle)
+        self.assertEqual(persisted["schema_version"], 2)
+        self.assertTrue(persisted["guards"])
+        self.assertEqual(persisted["guards"][0]["template"], "network.up")
+        self.assertEqual(persisted["action_safety"]["max_actions_per_hour"], 5)
+        self.assertEqual(persisted["server"]["client_id"], "cl_legacy")
+
+    def test_env_overrides_are_not_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump({"server": {"client_id": "cl_legacy"}}, handle)
+            cfg = load_config(path, env={"VIGIL_SERVER_SECRET": "env-only-secret"})
+            with open(path, "r", encoding="utf-8") as handle:
+                persisted = json.load(handle)
+        self.assertEqual(cfg["server"]["secret"], "env-only-secret")
+        self.assertEqual(persisted["server"]["secret"], "")
+        self.assertEqual(persisted["schema_version"], 2)
+
+    def test_invalid_file_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            raw = {"schema_version": 1, "server": {"base_url": "ftp://bad"}}
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(raw, handle)
+            cfg = load_config(
+                path, env={"VIGIL_SERVER_BASE_URL": "https://vigil.example.com"}
+            )
+            self.assertEqual(cfg["server"]["base_url"], "https://vigil.example.com")
+            with open(path, "r", encoding="utf-8") as handle:
+                persisted = json.load(handle)
+        self.assertEqual(persisted, raw)
 
 
 if __name__ == "__main__":

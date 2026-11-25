@@ -9,6 +9,7 @@
 
 import argparse
 import collections
+import copy
 import json
 import logging
 import logging.handlers
@@ -34,6 +35,8 @@ from .detect.base import (
     STATUS_WARN,
 )
 from .httpd import create_server
+from .guards import GuardStateMachine, aggregate_status, run_checks, validate_guards
+from .guards.recovery import RecoveryRunner
 from .lockfile import FileLock
 from .scheduler import IntervalScheduler
 from .spool import EventSpool
@@ -49,6 +52,7 @@ class RuntimeState:
         self.lock = threading.RLock()
         self.agent_version = agent_version
         self.checks = {}
+        self.guards = {}
         self.events = collections.deque(maxlen=max_events)
         self.logs = collections.deque(maxlen=max_logs)
         self.started_at = time.time()
@@ -67,6 +71,14 @@ class RuntimeState:
     def snapshot_checks(self):
         with self.lock:
             return dict(self.checks)
+
+    def set_guards(self, results):
+        with self.lock:
+            self.guards = dict(results)
+
+    def snapshot_guards(self):
+        with self.lock:
+            return dict(self.guards)
 
     def add_event(self, event):
         with self.lock:
@@ -293,10 +305,18 @@ class AgentApp:
         self.transport = Transport(config, save_config=self._persist_config)
         self.executor = ActionExecutor(config)
         self.engine = DetectionEngine()
+        self.guards = list(config.get("guards") or [])
+        # guards 来源：local=本地编辑；server=服务端下发（本地只读）
+        self.guards_source = "local"
+        self._server_guards = None
+        guards_state_path = os.path.join(
+            os.path.dirname(config["storage"]["state_path"]), "guards.json"
+        )
+        self.guard_fsm = GuardStateMachine(state_path=guards_state_path)
         self.scheduler = IntervalScheduler()
 
-        detect_interval = int(config["detect"]["interval"])
-        self.scheduler.add("detect", detect_interval)
+        # 调度节拍取「旧检测间隔」与「各 Guard 间隔」的最小值；每一项再按自身间隔节流。
+        self.scheduler.add("detect", self._detect_loop_interval(self.guards))
         self.scheduler.add("heartbeat", int(config["server"]["heartbeat_interval"]))
         self.scheduler.add("config", int(config["server"]["config_poll_interval"]))
 
@@ -306,10 +326,11 @@ class AgentApp:
         self._httpd_thread = None
         self._watchdog = None
         self._action_thread = None
-        self._failure_counts: dict[str, int] = {}
         self._etag = None
         self._server_config = {}
         self._next_register_at = 0.0
+        self._last_engine_at = 0.0
+        self._guard_last_run = {}
 
     # ---------- 生命周期 ----------
 
@@ -432,6 +453,7 @@ class AgentApp:
             seq,
             read_uptime(),
             modules=modules,
+            guards=self._guards_payload(),
             spool={"pending": stats["pending"], "dropped": stats["dropped"]},
             wan_ip=self._wan_ip(checks),
         )
@@ -467,6 +489,7 @@ class AgentApp:
             self._etag = result["etag"]
         body = result.get("body") or {}
         self._server_config = body if isinstance(body, dict) else {}
+        self._apply_server_guards(self._server_config)
         self._record_event(
             "config_received",
             "agent",
@@ -478,14 +501,82 @@ class AgentApp:
             self._etag or "-",
         )
 
+    def _apply_server_guards(self, server_config):
+        """应用服务端下发的 guards（热更新）。
+
+        - 含 guards 列表且校验通过：切换到 server 来源，本地不可编辑
+        - 未含 guards 键：回退到本地配置
+        - 校验失败：只记日志并保持当前 guards 不变
+        """
+        raw = server_config.get("guards") if isinstance(server_config, dict) else None
+        if isinstance(raw, list):
+            errors = []
+            validate_guards({"guards": raw}, errors)
+            if errors:
+                LOGGER.warning(
+                    "服务端下发的 guards 非法，保持当前配置：%s", "；".join(errors)
+                )
+                return
+            guards = copy.deepcopy(raw)
+            source = "server"
+        else:
+            if self.guards_source == "local" and self._server_guards is None:
+                # 已经是本地配置，无需重复替换与重置节流
+                return
+            guards = copy.deepcopy(self.config.get("guards") or [])
+            source = "local"
+
+        # guards 替换与 detect_once 互斥，避免检测过程中被换掉
+        with self._detect_lock:
+            self.guards = copy.deepcopy(guards)
+            self.guards_source = source
+            self._server_guards = copy.deepcopy(raw) if source == "server" else None
+            self._guard_last_run.clear()
+            self.scheduler.update_interval(
+                "detect", self._detect_loop_interval(self.guards)
+            )
+        LOGGER.info(
+            "已应用%s Guard 配置（%d 项）",
+            "服务端下发" if source == "server" else "本地",
+            len(self.guards),
+        )
+
     # ---------- 检测与自愈 ----------
+
+    def _detect_loop_interval(self, guards):
+        """计算 detect 调度节拍：旧 detect.interval 与启用 Guard 间隔的最小值。"""
+        try:
+            intervals = [int(self.config["detect"]["interval"])]
+        except (KeyError, TypeError, ValueError):
+            intervals = [30]
+        for guard in guards or []:
+            if not guard.get("enabled", True):
+                continue
+            try:
+                value = int((guard.get("policy") or {}).get("interval") or 0)
+            except (TypeError, ValueError):
+                value = 0
+            if value > 0:
+                intervals.append(value)
+        return min(intervals)
 
     def detect_once(self, emit_events=True, allow_actions=True):
         with self._detect_lock:
-            ctx = DetectContext(self.config, runner=CommandRunner())
-            results = self.engine.run(ctx)
+            now = time.time()
             previous = self.state.snapshot_checks()
-            self.state.set_checks(results)
+            engine_interval = int(self.config["detect"]["interval"])
+            if now - self._last_engine_at >= engine_interval or not previous:
+                ctx = DetectContext(self.config, runner=CommandRunner())
+                results = self.engine.run(ctx)
+                self.state.set_checks(results)
+                self._last_engine_at = now
+            else:
+                # 调度节拍可能小于旧检测间隔（被某个 Guard 拉快），此处按原间隔节流
+                results = previous
+
+            previous_guards = self.state.snapshot_guards()
+            guard_results = self._evaluate_guards(now=now, previous=previous_guards)
+            self.state.set_guards(guard_results)
 
             if emit_events:
                 for layer, result in results.items():
@@ -509,109 +600,210 @@ class AgentApp:
                             old_status or "未知",
                             new_status,
                         )
+                self._emit_guard_events(previous_guards, guard_results)
 
             if allow_actions:
-                self._update_failure_counts(results)
-                self._maybe_autorecover(results)
+                self._maybe_guard_recover(guard_results)
             return results
 
-    def _update_failure_counts(self, results):
-        for layer in ("net.carrier", "net.pppoe", "net.route", "net.dns"):
-            status = results.get(layer, {}).get("status")
-            if status == STATUS_CRITICAL:
-                self._failure_counts[layer] = self._failure_counts.get(layer, 0) + 1
-            else:
-                self._failure_counts[layer] = 0
+    def _evaluate_guards(self, now=None, previous=None):
+        """执行到期的 Guard Check，并推进各自的状态机。
 
-    def _maybe_autorecover(self, results):
-        action_cfg = self.config.get("action") or {}
-        if not action_cfg.get("enabled"):
+        每个 Guard 按 policy.interval 节流；未到期时沿用上一轮快照，
+        既保证心跳中的状态连续，也避免重复探测。
+        """
+        now = float(now if now is not None else time.time())
+        previous = previous or {}
+        runner = CommandRunner()
+        snapshots = {}
+        for guard in self.guards:
+            guard_id = str(guard.get("id"))
+            name = guard.get("name") or guard_id
+            if not guard.get("enabled", True):
+                self._guard_last_run.pop(guard_id, None)
+                snapshots[guard_id] = {
+                    "id": guard_id,
+                    "name": name,
+                    "template": guard.get("template", ""),
+                    "status": "DISABLED",
+                    "check_status": STATUS_SKIPPED,
+                    "checks": {},
+                }
+                continue
+
+            interval = int((guard.get("policy") or {}).get("interval") or 30)
+            last_run = self._guard_last_run.get(guard_id)
+            cached = previous.get(guard_id)
+            if last_run is not None and cached is not None and now - last_run < interval:
+                snapshots[guard_id] = cached
+                continue
+
+            checks = run_checks(guard, self.config, runner=runner)
+            check_status = aggregate_status(checks, guard.get("evaluate"))
+            fsm_state = self.guard_fsm.process(guard, check_status, now=now)
+            snapshots[guard_id] = {
+                "id": guard_id,
+                "name": name,
+                "template": guard.get("template", ""),
+                "status": fsm_state["status"],
+                "check_status": check_status,
+                "failure_count": fsm_state["failure_count"],
+                "success_count": fsm_state["success_count"],
+                "recovery_rounds": fsm_state["recovery_rounds"],
+                "rearm_at": fsm_state["rearm_at"],
+                "checks": checks,
+            }
+            self._guard_last_run[guard_id] = now
+        return snapshots
+
+    def _emit_guard_events(self, previous, current):
+        for guard_id, snapshot in current.items():
+            old = previous.get(guard_id) or {}
+            if old.get("status") == snapshot["status"]:
+                continue
+            self._record_event(
+                "guard_status",
+                guard_id,
+                {
+                    "guard_id": guard_id,
+                    "name": snapshot["name"],
+                    "status": snapshot["status"],
+                    "previous": old.get("status", ""),
+                    "check_status": snapshot["check_status"],
+                    "failure_count": snapshot.get("failure_count", 0),
+                },
+            )
+            LOGGER.info(
+                "守护项 %s 状态变化：%s -> %s",
+                snapshot["name"],
+                old.get("status", "未知"),
+                snapshot["status"],
+            )
+
+    def _maybe_guard_recover(self, guard_results):
+        safety = self.config.get("action_safety") or {}
+        if not safety.get("global_enabled", True):
             return
         if self._action_thread is not None and self._action_thread.is_alive():
             return
 
-        plan = None
-        threshold = int(action_cfg.get("failure_threshold", 3) or 3)
-
-        def ready(layer: str) -> bool:
-            return self._failure_counts.get(layer, 0) >= threshold
-
-        if (
-            results.get("net.carrier", {}).get("status") == STATUS_CRITICAL
-            and ready("net.carrier")
-        ):
-            # 管理性 down 或光猫侧掉电都会表现为载波丢失，ifup wan 可恢复前者
-            plan = ("net.carrier", "ifup_wan", None)
-        elif (
-            results.get("net.pppoe", {}).get("status") == STATUS_CRITICAL
-            and ready("net.pppoe")
-        ):
-            plan = ("net.pppoe", "ifup_wan", None)
-        elif (
-            results.get("net.route", {}).get("status") == STATUS_CRITICAL
-            and ready("net.route")
-        ):
-            plan = ("net.route", "ifup_wan", None)
-        elif (
-            results.get("net.dns", {}).get("status") == STATUS_CRITICAL
-            and ready("net.dns")
-        ):
-            services = action_cfg.get("allowed_services") or []
-            if services:
-                plan = ("net.dns", "restart_service", services[0])
-        if plan is None:
-            return
-
-        layer, name, target = plan
-        thread = threading.Thread(
-            target=self._run_action,
-            args=(layer, name, target),
-            name="vigil-action",
-            daemon=True,
-        )
-        self._action_thread = thread
-        thread.start()
-
-    def _run_action(self, layer, name, target):
-        LOGGER.info("触发 L1 动作 %s（来源 %s）", name, layer)
-        try:
-            outcome = self.executor.execute_with_recheck(
-                name, lambda: self._layer_ok(layer), target=target
+        for guard in self.guards:
+            if not guard.get("enabled", True):
+                continue
+            guard_id = str(guard.get("id"))
+            if not self.guard_fsm.should_recover(guard_id):
+                continue
+            snapshot = guard_results.get(guard_id) or {}
+            if snapshot.get("check_status") == STATUS_SKIPPED:
+                continue
+            thread = threading.Thread(
+                target=self._run_guard_recovery,
+                args=(guard,),
+                name="vigil-recovery",
+                daemon=True,
             )
+            self._action_thread = thread
+            LOGGER.info("触发守护项恢复链：%s", guard.get("name") or guard_id)
+            thread.start()
+            break
+
+    def _run_guard_recovery(self, guard):
+        guard_id = str(guard.get("id"))
+        name = guard.get("name") or guard_id
+        try:
+            runner = RecoveryRunner(
+                self.executor,
+                self.guard_fsm,
+                verify=lambda: self._guard_ok(guard),
+                on_action=self._record_guard_action,
+            )
+            outcome = runner.run(guard)
         except Exception:
-            LOGGER.exception("执行自动动作异常")
+            LOGGER.exception("执行守护项恢复链异常：%s", name)
+            self.guard_fsm.abort_recovery(guard_id)
             return
         finally:
             self._action_thread = None
 
-        attempts = outcome.get("attempts") or []
-        for attempt in attempts:
-            self._record_event(
-                "action_result",
-                layer,
-                {
-                    "action": attempt.get("action"),
-                    "target": attempt.get("target"),
-                    "result": attempt.get("result"),
-                    "reason": attempt.get("reason"),
-                    "exit_code": attempt.get("exit_code"),
-                    "latency_ms": attempt.get("latency_ms"),
-                    "output": attempt.get("output"),
-                },
-            )
+        state = outcome.get("state") or {}
+        self._record_event(
+            "guard_recovery",
+            guard_id,
+            {
+                "guard_id": guard_id,
+                "name": name,
+                "recovered": bool(outcome.get("recovered")),
+                "skipped": bool(outcome.get("skipped")),
+                "status": state.get("status", ""),
+                "attempts": len(outcome.get("attempts") or []),
+            },
+        )
         LOGGER.info(
-            "动作 %s 结束，共尝试 %d 次，恢复=%s",
+            "守护项 %s 恢复链结束：恢复=%s 状态=%s 动作数=%d",
             name,
-            len(attempts),
             outcome.get("recovered"),
+            state.get("status", ""),
+            len(outcome.get("attempts") or []),
+        )
+        self._sync_guard_state(guard_id)
+
+    def _sync_guard_state(self, guard_id):
+        """恢复链结束后刷新快照状态，下一轮检测立即复核 Check。"""
+        state = self.guard_fsm.snapshot(guard_id)
+        snapshots = self.state.snapshot_guards()
+        snapshot = snapshots.get(guard_id)
+        if not snapshot:
+            return
+        for key in (
+            "status",
+            "failure_count",
+            "success_count",
+            "recovery_rounds",
+            "rearm_at",
+        ):
+            snapshot[key] = state.get(key, snapshot.get(key))
+        self.state.set_guards(snapshots)
+        self._guard_last_run[guard_id] = 0
+
+    def _record_guard_action(self, guard, result):
+        self._record_event(
+            "action_result",
+            str(guard.get("id")),
+            {
+                "guard_id": str(guard.get("id")),
+                "guard_name": guard.get("name", ""),
+                "action": result.get("action"),
+                "target": result.get("target"),
+                "result": result.get("result"),
+                "reason": result.get("reason"),
+                "exit_code": result.get("exit_code"),
+                "latency_ms": result.get("latency_ms"),
+                "output": result.get("output"),
+            },
         )
 
-    def _layer_ok(self, layer):
+    def _guard_ok(self, guard):
         try:
-            self.detect_once(emit_events=False, allow_actions=False)
+            checks = run_checks(guard, self.config, runner=CommandRunner())
+            return aggregate_status(checks, guard.get("evaluate")) == STATUS_OK
         except Exception:
-            LOGGER.exception("动作后复检异常")
-        return self.state.snapshot_checks().get(layer, {}).get("status") == STATUS_OK
+            LOGGER.exception("守护项复检异常")
+            return False
+
+    def _guards_payload(self):
+        """心跳中的 Guard 快照，按 guard_id 索引。"""
+        payload = {}
+        for guard_id, snapshot in self.state.snapshot_guards().items():
+            payload[guard_id] = {
+                "id": guard_id,
+                "name": snapshot.get("name", ""),
+                "template": snapshot.get("template", ""),
+                "status": snapshot.get("status", ""),
+                "check_status": snapshot.get("check_status", ""),
+                "failure_count": snapshot.get("failure_count", 0),
+                "checks": snapshot.get("checks", {}),
+            }
+        return payload
 
     # ---------- 本地 API ----------
 
@@ -666,6 +858,9 @@ class AgentApp:
             "last_heartbeat_at": _iso_utc(last_heartbeat),
             "last_beacon_at": None,
             "modules": modules,
+            "guards": list(self.state.snapshot_guards().values()),
+            "guards_source": self.guards_source,
+            "guards_editable": self.guards_source == "local",
             "latest_checks": self._check_items(checks),
             "maintenance": bool(float(action_stats.get("maintenance_until") or 0) > now),
             "generated_at": _iso_utc(now),
@@ -697,6 +892,50 @@ class AgentApp:
 
     def api_checks(self):
         return self._check_items()
+
+    def api_guards(self):
+        """GET /api/guards：返回当前生效的 Guard 配置及来源。"""
+        return {
+            "items": copy.deepcopy(self.guards),
+            "source": self.guards_source,
+            "editable": self.guards_source == "local",
+        }
+
+    def api_guards_update(self, guards):
+        """PUT /api/guards：本地整表替换 Guard 配置并立即生效。"""
+        if self.guards_source == "server":
+            raise ValueError("managed_by_server")
+        if not isinstance(guards, list):
+            raise ValueError("guards 必须是数组")
+
+        candidate = copy.deepcopy(guards)
+        errors = []
+        validate_guards({"guards": candidate}, errors)
+        if errors:
+            raise ValueError("；".join(errors))
+
+        with self._detect_lock:
+            self.config["guards"] = copy.deepcopy(candidate)
+            self.guards = copy.deepcopy(candidate)
+            self.guards_source = "local"
+            self._server_guards = None
+            self._guard_last_run.clear()
+            self.scheduler.update_interval(
+                "detect", self._detect_loop_interval(self.guards)
+            )
+
+        save_config(self.config, self.config_path)
+        self._record_event(
+            "config_updated",
+            "guards",
+            {
+                "source": "local",
+                "count": len(candidate),
+                "guards": [guard.get("id") for guard in candidate],
+            },
+        )
+        LOGGER.info("本地 Guard 配置已更新并持久化（%d 项）", len(candidate))
+        return self.api_guards()
 
     def api_events(self, limit=50):
         items = self.state.events_snapshot(limit)
@@ -867,6 +1106,8 @@ class AgentApp:
                 session_ttl=int(httpd_cfg.get("session_ttl", 43200)),
                 login_max_failures=int(httpd_cfg.get("login_max_failures", 5)),
                 login_window=int(httpd_cfg.get("login_window", 60)),
+                guards_provider=self.api_guards,
+                guards_handler=self.api_guards_update,
             )
         except OSError as exc:
             LOGGER.error("本地 HTTP 服务启动失败：%s", exc)

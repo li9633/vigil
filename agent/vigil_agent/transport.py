@@ -304,7 +304,7 @@ class Transport:
         }
         return self._request("POST", "/api/v1/beacon", body=body)
 
-    def heartbeat(self, seq, uptime, modules=None, spool=None, wan_ip="", boot_id=None):
+    def heartbeat(self, seq, uptime, modules=None, spool=None, wan_ip="", boot_id=None, guards=None):
         error = self._require_registered()
         if error:
             return error
@@ -316,6 +316,7 @@ class Transport:
             "agent_version": __version__,
             "wan_ip": wan_ip or "",
             "modules": modules or {},
+            "guards": guards or {},
             "spool": spool or {"pending": 0, "dropped": 0},
         }
         return self._request("POST", "/api/v1/heartbeat", body=body)

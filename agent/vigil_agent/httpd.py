@@ -76,6 +76,8 @@ class VigilHTTPServer(ThreadingHTTPServer):
         session_ttl=43200,
         login_max_failures=5,
         login_window=60,
+        guards_provider=None,
+        guards_handler=None,
     ):
         super().__init__(address, VigilRequestHandler)
         self.token = token or ""
@@ -85,6 +87,8 @@ class VigilHTTPServer(ThreadingHTTPServer):
         self.events_provider = events_provider
         self.logs_provider = logs_provider
         self.action_handler = action_handler
+        self.guards_provider = guards_provider
+        self.guards_handler = guards_handler
         self.session_ttl = int(session_ttl)
         self.login_max_failures = int(login_max_failures)
         self.login_window = int(login_window)
@@ -116,6 +120,14 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(404, {"error": "not_found"})
 
+    def do_PUT(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path.startswith("/api/"):
+            query = urllib.parse.parse_qs(parsed.query)
+            self._handle_api("PUT", parsed.path, query)
+            return
+        self._send_json(404, {"error": "not_found"})
+
     # ---------- API ----------
 
     def _handle_api(self, method, path, query):
@@ -141,6 +153,12 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             limit = _parse_limit(query, DEFAULT_EVENT_LIMIT)
             self._serve_provider(self.server.logs_provider, limit)
             return
+        if method == "GET" and path == "/api/guards":
+            self._serve_provider(self.server.guards_provider)
+            return
+        if method == "PUT" and path == "/api/guards":
+            self._handle_guards_update()
+            return
         if method == "POST":
             match = ACTION_PATH_RE.match(path)
             if match:
@@ -157,6 +175,41 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             payload = provider(*args)
         except Exception:
             LOGGER.exception("本地 API 数据提供方异常")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_guards_update(self):
+        """PUT /api/guards：整表替换本地守护项配置。"""
+        body, error = self._read_json()
+        if error:
+            self._send_json(400, {"error": error})
+            return
+        guards = body.get("guards")
+        if not isinstance(guards, list):
+            self._send_json(400, {"error": "guards 必须是数组"})
+            return
+
+        handler = self.server.guards_handler
+        if handler is None:
+            self._send_json(500, {"error": "守护项编辑未启用"})
+            return
+        try:
+            payload = handler(guards)
+        except ValueError as exc:
+            if str(exc) == "managed_by_server":
+                self._send_json(
+                    409,
+                    {
+                        "error": "managed_by_server",
+                        "reason": "守护项由服务端下发，本地不可编辑",
+                    },
+                )
+                return
+            self._send_json(400, {"error": str(exc) or "守护项配置非法"})
+            return
+        except Exception:
+            LOGGER.exception("更新本地守护项失败")
             self._send_json(500, {"error": "internal_error"})
             return
         self._send_json(200, payload)
@@ -305,8 +358,13 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
         if os.path.isdir(full_path):
             full_path = os.path.join(full_path, "index.html")
         if not os.path.isfile(full_path):
-            self._send_json(404, {"error": "not_found"})
-            return
+            # SPA 深链接（/guards、/login 等）回退到 index.html；带扩展名的资源仍 404
+            index_path = os.path.join(root_real, "index.html")
+            if "." not in os.path.basename(relative) and os.path.isfile(index_path):
+                full_path = index_path
+            else:
+                self._send_json(404, {"error": "not_found"})
+                return
 
         content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
         try:
@@ -394,6 +452,8 @@ def create_server(
     session_ttl=43200,
     login_max_failures=5,
     login_window=60,
+    guards_provider=None,
+    guards_handler=None,
 ):
     """创建（未启动的）HTTP 服务实例。"""
     return VigilHTTPServer(
@@ -408,4 +468,6 @@ def create_server(
         session_ttl=session_ttl,
         login_max_failures=login_max_failures,
         login_window=login_window,
+        guards_provider=guards_provider,
+        guards_handler=guards_handler,
     )

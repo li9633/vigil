@@ -252,6 +252,12 @@ class HttpdTestBase(unittest.TestCase):
         status, _payload, _set_cookie, _ctype = self.request("GET", "/missing.js")
         self.assertEqual(status, 404)
 
+    def test_spa_deep_link_falls_back_to_index(self):
+        status, payload, _set_cookie, content_type = self.request("GET", "/guards")
+        self.assertEqual(status, 200)
+        self.assertIn("Vigil UI", payload)
+        self.assertIn("text/html", content_type)
+
     def test_placeholder_when_www_missing(self):
         self.stop_server()
         self.start_server(os.path.join(self.root, "not-installed"))

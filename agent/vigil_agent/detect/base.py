@@ -164,6 +164,8 @@ class DetectContext:
         sys_class_net="/sys/class/net",
         http_get=None,
         clock=None,
+        params=None,
+        cache=None,
     ):
         self.config = config
         self.detect = config.get("detect", {}) if isinstance(config, dict) else {}
@@ -171,11 +173,18 @@ class DetectContext:
         self.sys_class_net = sys_class_net
         self.http_get = http_get
         self.clock = clock or time.monotonic
-        self.cache = {}
+        self.params = params or {}
+        self.cache = cache if cache is not None else {}
+
+    def param(self, key, default=None):
+        """读取 Check 级参数，未设置时回退到默认值。"""
+        if key in self.params and self.params[key] is not None:
+            return self.params[key]
+        return default
 
     @property
     def timeout(self):
-        value = self.detect.get("timeout", 3)
+        value = self.params.get("timeout", self.detect.get("timeout", 3))
         try:
             return float(value)
         except (TypeError, ValueError):
@@ -183,7 +192,7 @@ class DetectContext:
 
     @property
     def wan_interface(self):
-        value = self.detect.get("wan_interface") or "wan"
+        value = self.param("interface", self.detect.get("wan_interface") or "wan")
         return str(value)
 
 
@@ -234,7 +243,9 @@ def resolve_wan_device(ctx):
     if key in ctx.cache:
         return ctx.cache[key]
 
-    configured = str(ctx.detect.get("wan_device") or "auto").strip()
+    configured = str(
+        ctx.param("device", ctx.detect.get("wan_device") or "auto")
+    ).strip()
     if configured and configured != "auto":
         ctx.cache[key] = (configured, "config")
         return ctx.cache[key]
