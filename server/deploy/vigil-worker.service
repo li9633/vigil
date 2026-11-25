@@ -1,0 +1,22 @@
+[Unit]
+Description=Vigil state machine worker
+After=network-online.target vigil-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vigil
+Group=vigil
+WorkingDirectory=/opt/vigil
+EnvironmentFile=/etc/vigil/server.env
+ExecStart=/opt/vigil/venv/bin/python -m app.worker
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/vigil
+
+[Install]
+WantedBy=multi-user.target

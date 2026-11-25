@@ -1,0 +1,27 @@
+[project]
+name = "vigil-server"
+version = "0.1.0"
+description = "Vigil 服务端：客户端接入、状态机与告警"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "sqlalchemy>=2.0,<2.1",
+    "pydantic>=2.7,<3.0",
+    "itsdangerous>=2.2,<3.0",
+    "httpx>=0.27,<1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0,<9.0",
+    "httpx>=0.27,<1.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
