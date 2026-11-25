@@ -53,6 +53,11 @@ h4 {
   line-height: 1.4;
 }
 
+/* 页面标题统一由顶部标题栏承载，避免重复 */
+.page-head .page-title {
+  display: none;
+}
+
 .page-sub {
   margin: var(--vigil-space-1) 0 0;
   font-size: var(--vigil-font-xs);
