@@ -305,6 +305,16 @@ class ActionExecutor:
             self._save_state(state)
             return state["maintenance_until"]
 
+    def apply_safety(self, safety):
+        """热更新全局动作安全上限。"""
+        safety = safety or {}
+        if "global_enabled" in safety:
+            self.enabled = bool(safety["global_enabled"])
+        if "max_risk_level" in safety:
+            self.max_level = str(safety["max_risk_level"])
+        if "max_actions_per_hour" in safety:
+            self.max_per_hour = int(safety["max_actions_per_hour"])
+
     def stats(self):
         with self._state_lock:
             now = float(self.now())

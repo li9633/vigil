@@ -64,6 +64,9 @@ DEFAULT_CONFIG = {
         "www_root": "/usr/share/vigil/www",
         "run_dir": "/var/run/vigil",
         "log_path": "/overlay/vigil/vigil.log",
+        "log_max_bytes": 2097152,
+        "log_backups": 2,
+        "log_compress": True,
         "lock_path": "/var/run/vigil/vigil.lock",
     },
     "agent": {

@@ -78,6 +78,12 @@ class VigilHTTPServer(ThreadingHTTPServer):
         login_window=60,
         guards_provider=None,
         guards_handler=None,
+        modules_provider=None,
+        script_import_handler=None,
+        script_delete_handler=None,
+        settings_provider=None,
+        settings_handler=None,
+        logs_export_provider=None,
     ):
         super().__init__(address, VigilRequestHandler)
         self.token = token or ""
@@ -89,6 +95,12 @@ class VigilHTTPServer(ThreadingHTTPServer):
         self.action_handler = action_handler
         self.guards_provider = guards_provider
         self.guards_handler = guards_handler
+        self.modules_provider = modules_provider
+        self.script_import_handler = script_import_handler
+        self.script_delete_handler = script_delete_handler
+        self.settings_provider = settings_provider
+        self.settings_handler = settings_handler
+        self.logs_export_provider = logs_export_provider
         self.session_ttl = int(session_ttl)
         self.login_max_failures = int(login_max_failures)
         self.login_window = int(login_window)
@@ -150,14 +162,31 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             self._serve_provider(self.server.events_provider, limit)
             return
         if method == "GET" and path == "/api/logs":
-            limit = _parse_limit(query, DEFAULT_EVENT_LIMIT)
-            self._serve_provider(self.server.logs_provider, limit)
+            self._serve_provider(self.server.logs_provider, **_parse_log_filters(query))
+            return
+        if method == "GET" and path == "/api/logs/export":
+            self._handle_logs_export(query)
             return
         if method == "GET" and path == "/api/guards":
             self._serve_provider(self.server.guards_provider)
             return
         if method == "PUT" and path == "/api/guards":
             self._handle_guards_update()
+            return
+        if method == "GET" and path == "/api/modules":
+            self._serve_provider(self.server.modules_provider)
+            return
+        if method == "POST" and path == "/api/modules/script":
+            self._handle_script_import()
+            return
+        if method == "POST" and path == "/api/modules/script/delete":
+            self._handle_script_delete()
+            return
+        if method == "GET" and path == "/api/settings":
+            self._serve_provider(self.server.settings_provider)
+            return
+        if method == "PUT" and path == "/api/settings":
+            self._handle_settings_update()
             return
         if method == "POST":
             match = ACTION_PATH_RE.match(path)
@@ -167,12 +196,12 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
 
         self._send_json(404, {"error": "not_found"})
 
-    def _serve_provider(self, provider, *args):
+    def _serve_provider(self, provider, *args, **kwargs):
         if provider is None:
-            self._send_json(200, [] if args else {})
+            self._send_json(200, [] if args or kwargs else {})
             return
         try:
-            payload = provider(*args)
+            payload = provider(*args, **kwargs)
         except Exception:
             LOGGER.exception("本地 API 数据提供方异常")
             self._send_json(500, {"error": "internal_error"})
@@ -210,6 +239,101 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             return
         except Exception:
             LOGGER.exception("更新本地守护项失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_script_import(self):
+        """POST /api/modules/script：导入脚本探测器。"""
+        handler = self.server.script_import_handler
+        if handler is None:
+            self._send_json(500, {"error": "脚本探测器管理未启用"})
+            return
+        body, error = self._read_json()
+        if error:
+            self._send_json(400, {"error": error})
+            return
+        if not isinstance(body, dict):
+            self._send_json(400, {"error": "请求体必须是对象"})
+            return
+        try:
+            payload = handler(body)
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "脚本探测器配置非法"})
+            return
+        except Exception:
+            LOGGER.exception("导入脚本探测器失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_script_delete(self):
+        """POST /api/modules/script/delete：删除脚本探测器。"""
+        handler = self.server.script_delete_handler
+        if handler is None:
+            self._send_json(500, {"error": "脚本探测器管理未启用"})
+            return
+        body, error = self._read_json()
+        if error:
+            self._send_json(400, {"error": error})
+            return
+        name = body.get("name") if isinstance(body, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            self._send_json(400, {"error": "name 不能为空"})
+            return
+        try:
+            payload = handler(name.strip())
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "删除失败"})
+            return
+        except Exception:
+            LOGGER.exception("删除脚本探测器失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_logs_export(self, query):
+        """GET /api/logs/export：按过滤条件下载 JSONL 日志。"""
+        provider = self.server.logs_export_provider
+        if provider is None:
+            self._send_json(500, {"error": "日志导出未启用"})
+            return
+        filters = _parse_log_filters(query)
+        filters.pop("limit", None)
+        try:
+            data = provider(**filters)
+        except Exception:
+            LOGGER.exception("导出日志失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        filename = "vigil-logs-%s.jsonl" % time.strftime("%Y%m%d-%H%M%S")
+        self._send_bytes(
+            200,
+            data if isinstance(data, bytes) else str(data).encode("utf-8"),
+            "application/x-ndjson; charset=utf-8",
+            {"Content-Disposition": 'attachment; filename="%s"' % filename},
+        )
+
+    def _handle_settings_update(self):
+        """PUT /api/settings：更新客户端运行设置。"""
+        handler = self.server.settings_handler
+        if handler is None:
+            self._send_json(500, {"error": "设置编辑未启用"})
+            return
+        body, error = self._read_json()
+        if error:
+            self._send_json(400, {"error": error})
+            return
+        if not isinstance(body, dict):
+            self._send_json(400, {"error": "请求体必须是对象"})
+            return
+        try:
+            payload = handler(body)
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "设置非法"})
+            return
+        except Exception:
+            LOGGER.exception("更新客户端设置失败")
             self._send_json(500, {"error": "internal_error"})
             return
         self._send_json(200, payload)
@@ -439,6 +563,30 @@ def _parse_limit(query, default):
     return max(1, min(MAX_LIMIT, value))
 
 
+def _parse_log_filters(query):
+    def first(name):
+        values = query.get(name) if query else None
+        if not values:
+            return None
+        text = str(values[0]).strip()
+        return text or None
+
+    since = None
+    raw_since = first("since")
+    if raw_since:
+        try:
+            since = float(raw_since)
+        except ValueError:
+            since = None
+    return {
+        "limit": _parse_limit(query, 200),
+        "level": first("level"),
+        "event": first("event"),
+        "guard_id": first("guard_id"),
+        "since": since,
+    }
+
+
 def create_server(
     bind,
     port,
@@ -454,6 +602,12 @@ def create_server(
     login_window=60,
     guards_provider=None,
     guards_handler=None,
+    modules_provider=None,
+    script_import_handler=None,
+    script_delete_handler=None,
+    settings_provider=None,
+    settings_handler=None,
+    logs_export_provider=None,
 ):
     """创建（未启动的）HTTP 服务实例。"""
     return VigilHTTPServer(
@@ -470,4 +624,10 @@ def create_server(
         login_window=login_window,
         guards_provider=guards_provider,
         guards_handler=guards_handler,
+        modules_provider=modules_provider,
+        script_import_handler=script_import_handler,
+        script_delete_handler=script_delete_handler,
+        settings_provider=settings_provider,
+        settings_handler=settings_handler,
+        logs_export_provider=logs_export_provider,
     )

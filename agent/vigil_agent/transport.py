@@ -180,6 +180,15 @@ class Transport:
         server["client_id"] = client_id
         server["secret"] = secret
 
+    def update_server(self, base_url):
+        """热更新服务端地址，并重建底层 HTTP 客户端。"""
+        server = self.config.setdefault("server", {})
+        server["base_url"] = str(base_url).rstrip("/")
+        self.base_url = server["base_url"]
+        self.client = UrllibHttpClient(
+            verify_tls=server.get("verify_tls", True), timeout=self.timeout
+        )
+
     def _headers(self, extra=None):
         headers = {
             "Accept": "application/json",

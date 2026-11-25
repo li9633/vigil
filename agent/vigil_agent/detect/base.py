@@ -97,7 +97,7 @@ class CommandRunner:
     def __init__(self, default_timeout=10):
         self.default_timeout = default_timeout
 
-    def run(self, args, timeout=None):
+    def run(self, args, timeout=None, env=None):
         if isinstance(args, str):
             raise TypeError("命令必须是参数列表，禁止拼接 shell 字符串")
         timeout = self.default_timeout if timeout is None else timeout
@@ -107,6 +107,10 @@ class CommandRunner:
             "encoding": "utf-8",
             "errors": "replace",
         }
+        if env:
+            merged_env = dict(os.environ)
+            merged_env.update({str(key): str(value) for key, value in env.items()})
+            popen_kwargs["env"] = merged_env
         if os.name == "nt":
             popen_kwargs["creationflags"] = getattr(
                 subprocess, "CREATE_NEW_PROCESS_GROUP", 0

@@ -4,7 +4,7 @@
 本模块只做检测，不做失败计数与动作决策；状态机在 guards.runner 中实现。
 """
 
-from ..detect import carrier, dns, http, pppoe, route
+from ..detect import carrier, dns, http, port, pppoe, process, route, script
 from ..detect.base import (
     STATUS_CRITICAL,
     STATUS_OK,
@@ -22,7 +22,61 @@ BUILTIN_PROBES = {
     "route": route.detect,
     "dns": dns.detect,
     "http": http.detect,
+    "process": process.detect,
+    "port": port.detect,
+    "script": script.detect,
 }
+
+BUILTIN_PROBE_INFO = [
+    {
+        "id": "carrier",
+        "name": "物理链路",
+        "description": "读取 /sys/class/net/<device>/carrier 判断链路是否 up",
+        "params": ["device"],
+    },
+    {
+        "id": "pppoe",
+        "name": "PPPoE 接口",
+        "description": "通过 ubus 判断 WAN 逻辑接口是否 up 及在线时长",
+        "params": ["interface"],
+    },
+    {
+        "id": "route",
+        "name": "默认路由",
+        "description": "检查默认路由与出口 IP 是否存在",
+        "params": [],
+    },
+    {
+        "id": "dns",
+        "name": "DNS 解析",
+        "description": "经本地 DNS 解析固定域名",
+        "params": ["name", "server"],
+    },
+    {
+        "id": "http",
+        "name": "HTTP 204",
+        "description": "直连 204 端点探测，忽略系统代理",
+        "params": ["url"],
+    },
+    {
+        "id": "process",
+        "name": "进程/服务",
+        "description": "查询 procd 服务状态，ubus 不可用时回退 pgrep",
+        "params": ["service", "process"],
+    },
+    {
+        "id": "port",
+        "name": "TCP 端口",
+        "description": "TCP 连接探测目标端口",
+        "params": ["host", "port"],
+    },
+    {
+        "id": "script",
+        "name": "本地脚本",
+        "description": "执行 probes.d 中登记并通过 SHA-256 校验的脚本",
+        "params": ["name"],
+    },
+]
 
 ABNORMAL = (STATUS_WARN, STATUS_CRITICAL, STATUS_UNKNOWN)
 

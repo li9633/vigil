@@ -13,6 +13,7 @@ from .model import (  # noqa: F401
     validate_guards,
 )
 from .checks import (  # noqa: F401
+    BUILTIN_PROBE_INFO,
     BUILTIN_PROBES,
     aggregate_status,
     check_id,

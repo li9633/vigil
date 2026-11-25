@@ -12,18 +12,24 @@ import collections
 import copy
 import json
 import logging
-import logging.handlers
 import os
 import signal
 import socket
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
-from . import __version__
+from . import PROTOCOL_VERSION, __version__
 from .action.executor import ActionExecutor
 from .config import DEFAULT_CONFIG_PATH, ConfigError, load_config, save_config
+from .detect.script import (
+    delete_script,
+    inspect_scripts,
+    save_script,
+)
 from .detect.base import (
     CommandRunner,
     DetectContext,
@@ -35,7 +41,23 @@ from .detect.base import (
     STATUS_WARN,
 )
 from .httpd import create_server
-from .guards import GuardStateMachine, aggregate_status, run_checks, validate_guards
+from .logstore import (
+    CompressingRotatingFileHandler,
+    JsonlFormatter,
+    MemoryLogHandler,
+    export_log_events,
+    filter_events,
+    log_event,
+    read_log_events,
+    set_log_context,
+)
+from .guards import (
+    BUILTIN_PROBE_INFO,
+    GuardStateMachine,
+    aggregate_status,
+    run_checks,
+    validate_guards,
+)
 from .guards.recovery import RecoveryRunner
 from .lockfile import FileLock
 from .scheduler import IntervalScheduler
@@ -100,26 +122,6 @@ class RuntimeState:
         limit = max(0, int(limit))
         return items[-limit:] if limit else []
 
-
-class MemoryLogHandler(logging.Handler):
-    """把日志同步到内存环形缓冲，供本地 API 查询。"""
-
-    def __init__(self, state):
-        super().__init__()
-        self.state = state
-
-    def emit(self, record):
-        try:
-            self.state.add_log(
-                {
-                    "ts": int(record.created),
-                    "level": record.levelname,
-                    "logger": record.name,
-                    "message": record.getMessage(),
-                }
-            )
-        except Exception:  # 日志链路本身不能抛异常
-            pass
 
 
 def read_uptime(path="/proc/uptime"):
@@ -239,30 +241,39 @@ def prepare_storage(config):
     return persistent
 
 
-def configure_logging(level_name, log_path, state):
+def configure_logging(
+    level_name,
+    log_path,
+    state,
+    *,
+    compress=True,
+    max_bytes=2 * 1024 * 1024,
+    backups=2,
+):
     level = getattr(logging, str(level_name).upper(), logging.INFO)
     root = logging.getLogger()
     root.setLevel(level)
-    formatter = logging.Formatter(
+    text_formatter = logging.Formatter(
         "%(asctime)s %(levelname)s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"
     )
 
     console = logging.StreamHandler(sys.stderr)
-    console.setFormatter(formatter)
+    console.setFormatter(text_formatter)
     root.addHandler(console)
 
     try:
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=1024 * 1024, backupCount=2, encoding="utf-8"
+        file_handler = CompressingRotatingFileHandler(
+            log_path,
+            max_bytes=max_bytes,
+            backup_count=backups,
+            compress=compress,
         )
-        file_handler.setFormatter(formatter)
+        file_handler.setFormatter(JsonlFormatter())
         root.addHandler(file_handler)
     except OSError as exc:
         root.warning("无法写入日志文件 %s：%s", log_path, exc)
 
-    memory = MemoryLogHandler(state)
-    memory.setFormatter(formatter)
-    root.addHandler(memory)
+    root.addHandler(MemoryLogHandler(state))
 
 
 class Watchdog(threading.Thread):
@@ -282,6 +293,13 @@ class Watchdog(threading.Thread):
                     "主循环 %.1fs 未 tick，超过看门狗阈值 %.1fs，强制退出",
                     elapsed,
                     self.timeout,
+                )
+                log_event(
+                    "error",
+                    "agent.watchdog",
+                    "主循环超时，强制退出",
+                    elapsed_seconds=round(elapsed, 2),
+                    timeout_seconds=self.timeout,
                 )
                 logging.shutdown()
                 os._exit(1)
@@ -303,6 +321,8 @@ class AgentApp:
 
         self.spool = EventSpool(config["storage"]["spool_dir"])
         self.transport = Transport(config, save_config=self._persist_config)
+        set_log_context(self.transport.client_id, self.transport.boot_id)
+        self._log_throttle = {}
         self.executor = ActionExecutor(config)
         self.engine = DetectionEngine()
         self.guards = list(config.get("guards") or [])
@@ -344,11 +364,13 @@ class AgentApp:
         self._watchdog = Watchdog(self.state, timeout)
         self._watchdog.start()
         self.state.touch()
-        LOGGER.info(
-            "vigil-agent %s 启动（检测间隔 %ss，心跳 %ss）",
-            __version__,
-            self.config["detect"]["interval"],
-            self.config["server"]["heartbeat_interval"],
+        log_event(
+            "info",
+            "agent.start",
+            "vigil-agent 启动",
+            version=__version__,
+            detect_interval=int(self.config["detect"]["interval"]),
+            heartbeat_interval=int(self.config["server"]["heartbeat_interval"]),
         )
         try:
             while not self._stop_event.is_set():
@@ -389,6 +411,7 @@ class AgentApp:
             self._httpd = None
             self._httpd_thread = None
         LOGGER.info("vigil-agent 已退出")
+        log_event("info", "agent.stop", "vigil-agent 已退出")
 
     def stop(self):
         self._stop_event.set()
@@ -434,11 +457,24 @@ class AgentApp:
                 "agent",
                 {"client_id": self.transport.client_id},
             )
-            LOGGER.info("注册成功，client_id=%s", self.transport.client_id)
+            set_log_context(self.transport.client_id, self.transport.boot_id)
+            log_event(
+                "info",
+                "client.register",
+                "注册成功",
+                client_id=self.transport.client_id,
+            )
             return True
 
         self._next_register_at = now + 300
-        LOGGER.warning("注册失败：%s（5 分钟后重试）", result.get("error"))
+        self._log_throttled(
+            "register",
+            "warn",
+            "client.register.fail",
+            "注册失败，5 分钟后重试",
+            interval=300,
+            error=str(result.get("error") or ""),
+        )
         return False
 
     def heartbeat_once(self):
@@ -461,7 +497,14 @@ class AgentApp:
             self.state.last_heartbeat = time.time()
             self.flush_spool()
         else:
-            LOGGER.warning("心跳失败：%s", result.get("error"))
+            self._log_throttled(
+                "heartbeat",
+                "warn",
+                "heartbeat.fail",
+                "心跳失败",
+                interval=60,
+                error=str(result.get("error") or ""),
+            )
 
     def flush_spool(self):
         for _ in range(3):
@@ -470,7 +513,14 @@ class AgentApp:
                 return
             result = self.transport.events(batch)
             if not result.get("ok"):
-                LOGGER.warning("事件补传失败：%s", result.get("error"))
+                self._log_throttled(
+                    "events",
+                    "warn",
+                    "events.upload.fail",
+                    "事件补传失败",
+                    interval=60,
+                    error=str(result.get("error") or ""),
+                )
                 return
             body = result.get("body") or {}
             acked = body.get("acked") or body.get("acked_seqs")
@@ -481,7 +531,14 @@ class AgentApp:
     def poll_config(self):
         result = self.transport.fetch_config(self._etag)
         if not result.get("ok"):
-            LOGGER.warning("拉取服务端配置失败：%s", result.get("error"))
+            self._log_throttled(
+                "config",
+                "warn",
+                "config.fetch.fail",
+                "拉取服务端配置失败",
+                interval=60,
+                error=str(result.get("error") or ""),
+            )
             return
         if result.get("status") == 304:
             return
@@ -495,10 +552,12 @@ class AgentApp:
             "agent",
             {"etag": self._etag or "", "keys": sorted(self._server_config.keys())[:20]},
         )
-        LOGGER.info(
-            "已接收服务端配置（%d 个键，etag=%s）",
-            len(self._server_config),
-            self._etag or "-",
+        log_event(
+            "info",
+            "config.received",
+            "已接收服务端配置",
+            keys=len(self._server_config),
+            etag=self._etag or "",
         )
 
     def _apply_server_guards(self, server_config):
@@ -513,8 +572,11 @@ class AgentApp:
             errors = []
             validate_guards({"guards": raw}, errors)
             if errors:
-                LOGGER.warning(
-                    "服务端下发的 guards 非法，保持当前配置：%s", "；".join(errors)
+                log_event(
+                    "warn",
+                    "guard_config.invalid",
+                    "服务端下发的守护项非法，保持当前配置",
+                    errors=errors[:20],
                 )
                 return
             guards = copy.deepcopy(raw)
@@ -535,10 +597,12 @@ class AgentApp:
             self.scheduler.update_interval(
                 "detect", self._detect_loop_interval(self.guards)
             )
-        LOGGER.info(
-            "已应用%s Guard 配置（%d 项）",
-            "服务端下发" if source == "server" else "本地",
-            len(self.guards),
+        log_event(
+            "info",
+            "guard_config.apply",
+            "已应用守护项配置",
+            source=source,
+            count=len(self.guards),
         )
 
     # ---------- 检测与自愈 ----------
@@ -641,6 +705,18 @@ class AgentApp:
             checks = run_checks(guard, self.config, runner=runner)
             check_status = aggregate_status(checks, guard.get("evaluate"))
             fsm_state = self.guard_fsm.process(guard, check_status, now=now)
+            if LOGGER.isEnabledFor(logging.DEBUG):
+                for check in checks.values():
+                    log_event(
+                        "debug",
+                        "guard.check",
+                        "Check 结果",
+                        guard={"id": guard_id, "name": name, "template": guard.get("template", "")},
+                        check={"id": check.get("id"), "probe": check.get("probe")},
+                        status=check.get("status"),
+                        latency_ms=check.get("latency_ms"),
+                        evidence=check.get("evidence"),
+                    )
             snapshots[guard_id] = {
                 "id": guard_id,
                 "name": name,
@@ -673,11 +749,28 @@ class AgentApp:
                     "failure_count": snapshot.get("failure_count", 0),
                 },
             )
-            LOGGER.info(
-                "守护项 %s 状态变化：%s -> %s",
-                snapshot["name"],
-                old.get("status", "未知"),
-                snapshot["status"],
+            status = snapshot["status"]
+            if status == "GAVE_UP":
+                level = "error"
+            elif status in ("FAILED", "PENDING"):
+                level = "warn"
+            else:
+                level = "info"
+            log_event(
+                level,
+                "guard.state",
+                "守护项状态变化：%s -> %s" % (old.get("status", "未知"), status),
+                guard={
+                    "id": guard_id,
+                    "name": snapshot["name"],
+                    "template": snapshot.get("template", ""),
+                },
+                **{
+                    "from": old.get("status", ""),
+                    "to": snapshot["status"],
+                    "check_status": snapshot["check_status"],
+                    "failure_count": snapshot.get("failure_count", 0),
+                },
             )
 
     def _maybe_guard_recover(self, guard_results):
@@ -703,29 +796,77 @@ class AgentApp:
                 daemon=True,
             )
             self._action_thread = thread
-            LOGGER.info("触发守护项恢复链：%s", guard.get("name") or guard_id)
             thread.start()
             break
 
     def _run_guard_recovery(self, guard):
         guard_id = str(guard.get("id"))
         name = guard.get("name") or guard_id
+        recovery_id = str(uuid.uuid4())
+        started = time.monotonic()
+        guard_payload = {
+            "id": guard_id,
+            "name": name,
+            "template": guard.get("template", ""),
+        }
+        log_event(
+            "warn",
+            "guard.recover.start",
+            "开始执行恢复链",
+            recovery_id=recovery_id,
+            guard=guard_payload,
+            actions=[step.get("action") for step in guard.get("recovery") or []],
+        )
         try:
             runner = RecoveryRunner(
                 self.executor,
                 self.guard_fsm,
                 verify=lambda: self._guard_ok(guard),
                 on_action=self._record_guard_action,
+                on_verify=lambda ok, attempt: self._record_guard_verify(
+                    guard, ok, attempt, recovery_id
+                ),
+                recovery_id=recovery_id,
             )
             outcome = runner.run(guard)
         except Exception:
             LOGGER.exception("执行守护项恢复链异常：%s", name)
             self.guard_fsm.abort_recovery(guard_id)
+            log_event(
+                "error",
+                "guard.recover.error",
+                "恢复链执行异常",
+                recovery_id=recovery_id,
+                guard=guard_payload,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
             return
         finally:
             self._action_thread = None
 
         state = outcome.get("state") or {}
+        status = state.get("status", "")
+        duration_ms = int((time.monotonic() - started) * 1000)
+        if status == "GAVE_UP":
+            event, level, message = "guard.recover.give_up", "error", "恢复链已放弃"
+        elif outcome.get("recovered"):
+            event, level, message = "guard.recover.result", "info", "守护项已恢复"
+        elif outcome.get("skipped"):
+            event, level, message = "guard.recover.result", "warn", "恢复动作被安全策略拒绝"
+        else:
+            event, level, message = "guard.recover.result", "warn", "恢复链未成功"
+        log_event(
+            level,
+            event,
+            message,
+            recovery_id=recovery_id,
+            guard=guard_payload,
+            status=status,
+            recovered=bool(outcome.get("recovered")),
+            skipped=bool(outcome.get("skipped")),
+            attempts=len(outcome.get("attempts") or []),
+            duration_ms=duration_ms,
+        )
         self._record_event(
             "guard_recovery",
             guard_id,
@@ -738,14 +879,22 @@ class AgentApp:
                 "attempts": len(outcome.get("attempts") or []),
             },
         )
-        LOGGER.info(
-            "守护项 %s 恢复链结束：恢复=%s 状态=%s 动作数=%d",
-            name,
-            outcome.get("recovered"),
-            state.get("status", ""),
-            len(outcome.get("attempts") or []),
-        )
         self._sync_guard_state(guard_id)
+
+    def _record_guard_verify(self, guard, recovered, attempt, recovery_id):
+        log_event(
+            "info" if recovered else "warn",
+            "guard.recover.verify",
+            "恢复验证%s" % ("通过" if recovered else "未通过"),
+            recovery_id=recovery_id,
+            guard={
+                "id": str(guard.get("id")),
+                "name": guard.get("name") or str(guard.get("id")),
+                "template": guard.get("template", ""),
+            },
+            attempt=attempt,
+            recovered=bool(recovered),
+        )
 
     def _sync_guard_state(self, guard_id):
         """恢复链结束后刷新快照状态，下一轮检测立即复核 Check。"""
@@ -766,6 +915,27 @@ class AgentApp:
         self._guard_last_run[guard_id] = 0
 
     def _record_guard_action(self, guard, result):
+        guard_payload = {
+            "id": str(guard.get("id")),
+            "name": guard.get("name") or str(guard.get("id")),
+            "template": guard.get("template", ""),
+        }
+        log_event(
+            "info" if result.get("executed") else "warn",
+            "action.result",
+            "动作执行%s" % ("成功" if result.get("executed") else "被拒绝"),
+            recovery_id=result.get("recovery_id"),
+            attempt=result.get("attempt"),
+            guard=guard_payload,
+            action={
+                "name": result.get("action"),
+                "target": result.get("target"),
+                "result": result.get("result"),
+                "exit_code": result.get("exit_code"),
+            },
+            reason=result.get("reason"),
+            duration_ms=result.get("latency_ms"),
+        )
         self._record_event(
             "action_result",
             str(guard.get("id")),
@@ -788,6 +958,16 @@ class AgentApp:
             return aggregate_status(checks, guard.get("evaluate")) == STATUS_OK
         except Exception:
             LOGGER.exception("守护项复检异常")
+            log_event(
+                "error",
+                "guard.verify.error",
+                "守护项复检异常",
+                guard={
+                    "id": str(guard.get("id")),
+                    "name": guard.get("name") or str(guard.get("id")),
+                    "template": guard.get("template", ""),
+                },
+            )
             return False
 
     def _guards_payload(self):
@@ -934,8 +1114,173 @@ class AgentApp:
                 "guards": [guard.get("id") for guard in candidate],
             },
         )
-        LOGGER.info("本地 Guard 配置已更新并持久化（%d 项）", len(candidate))
+        log_event(
+            "info",
+            "guard_config.update",
+            "本地守护项配置已更新并持久化",
+            count=len(candidate),
+            source="local",
+        )
         return self.api_guards()
+
+    def api_modules(self):
+        """GET /api/modules：内置探测器与本地脚本清单。"""
+        return {
+            "builtin": [dict(item) for item in BUILTIN_PROBE_INFO],
+            "scripts": inspect_scripts(),
+        }
+
+    def api_script_import(self, payload):
+        """POST /api/modules/script：导入或覆盖脚本探测器。"""
+        if not isinstance(payload, dict):
+            raise ValueError("请求体必须是对象")
+        content = payload.get("content")
+        if not isinstance(content, str):
+            raise ValueError("content 必须是字符串")
+        entry = save_script(
+            payload.get("name"),
+            content,
+            timeout=payload.get("timeout", 10),
+        )
+        self._record_event(
+            "probe_imported",
+            "probes",
+            {"name": entry.get("name"), "file": entry.get("file")},
+        )
+        log_event(
+            "info",
+            "probe.import",
+            "脚本探测器已导入",
+            probe={"name": entry.get("name"), "file": entry.get("file")},
+            sha256=entry.get("sha256"),
+        )
+        return {"ok": True, "script": entry, "modules": self.api_modules()}
+
+    def api_script_delete(self, name):
+        """POST /api/modules/script/delete：删除脚本探测器。"""
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("name 不能为空")
+        delete_script(name.strip())
+        self._record_event("probe_deleted", "probes", {"name": name.strip()})
+        log_event("info", "probe.delete", "脚本探测器已删除", probe={"name": name.strip()})
+        return {"ok": True, "modules": self.api_modules()}
+
+    def api_settings(self):
+        """GET /api/settings：客户端运行设置与版本信息。"""
+        server = self.config.get("server") or {}
+        stats = self.executor.stats()
+        now = time.time()
+        until = float(stats.get("maintenance_until") or 0)
+        return {
+            "version": __version__,
+            "protocol_version": PROTOCOL_VERSION,
+            "config_path": self.config_path,
+            "server": {
+                "base_url": self.transport.base_url,
+                "client_id": self.transport.client_id,
+                "registered": self.transport.is_registered,
+                "heartbeat_interval": int(server.get("heartbeat_interval") or 0),
+                "config_poll_interval": int(server.get("config_poll_interval") or 0),
+                "verify_tls": bool(server.get("verify_tls", True)),
+            },
+            "action_safety": {
+                "global_enabled": self.executor.enabled,
+                "max_risk_level": self.executor.max_level,
+                "max_actions_per_hour": self.executor.max_per_hour,
+                "allowed_services": list(self.executor.allowed_services),
+            },
+            "maintenance": {
+                "active": until > now,
+                "until": int(until),
+                "remaining_seconds": max(0, int(until - now)),
+            },
+            "guards_source": self.guards_source,
+            "generated_at": int(now),
+        }
+
+    def api_settings_update(self, payload):
+        """PUT /api/settings：更新服务端地址、心跳间隔、安全上限与维护窗口。"""
+        if not isinstance(payload, dict):
+            raise ValueError("请求体必须是对象")
+
+        base_url = None
+        server_payload = payload.get("server")
+        if isinstance(server_payload, dict) and "base_url" in server_payload:
+            text = str(server_payload.get("base_url") or "").strip().rstrip("/")
+            parsed = urlparse(text)
+            if (
+                parsed.scheme not in ("http", "https")
+                or not parsed.netloc
+                or any(char.isspace() for char in text)
+            ):
+                raise ValueError("服务器地址必须是 http(s) URL")
+            base_url = text
+
+        heartbeat = None
+        if "heartbeat_interval" in payload:
+            try:
+                heartbeat = int(payload["heartbeat_interval"])
+            except (TypeError, ValueError):
+                raise ValueError("心跳间隔必须是整数")
+            if not 10 <= heartbeat <= 300:
+                raise ValueError("心跳间隔必须在 10-300 秒之间")
+
+        safety_updates = {}
+        safety_payload = payload.get("action_safety")
+        if safety_payload is not None:
+            if not isinstance(safety_payload, dict):
+                raise ValueError("action_safety 必须是对象")
+            if "global_enabled" in safety_payload:
+                if not isinstance(safety_payload["global_enabled"], bool):
+                    raise ValueError("global_enabled 必须是布尔值")
+                safety_updates["global_enabled"] = safety_payload["global_enabled"]
+            if "max_risk_level" in safety_payload:
+                level = str(safety_payload["max_risk_level"]).upper()
+                if level != "L1":
+                    raise ValueError("当前仅支持 L1 动作")
+                safety_updates["max_risk_level"] = level
+            if "max_actions_per_hour" in safety_payload:
+                try:
+                    limit = int(safety_payload["max_actions_per_hour"])
+                except (TypeError, ValueError):
+                    raise ValueError("每小时动作上限必须是整数")
+                if not 1 <= limit <= 60:
+                    raise ValueError("每小时动作上限必须在 1-60 之间")
+                safety_updates["max_actions_per_hour"] = limit
+
+        maintenance = None
+        if "maintenance_minutes" in payload:
+            try:
+                maintenance = int(payload["maintenance_minutes"])
+            except (TypeError, ValueError):
+                raise ValueError("维护窗口必须是整数分钟")
+            if not 0 <= maintenance <= 1440:
+                raise ValueError("维护窗口必须在 0-1440 分钟之间")
+
+        changed = []
+        if base_url is not None:
+            self.transport.update_server(base_url)
+            self._etag = None
+            self._server_config = {}
+            changed.append("server.base_url")
+        if heartbeat is not None:
+            self.config.setdefault("server", {})["heartbeat_interval"] = heartbeat
+            self.scheduler.update_interval("heartbeat", heartbeat)
+            changed.append("server.heartbeat_interval")
+        if safety_updates:
+            safety = self.config.setdefault("action_safety", {})
+            safety.update(safety_updates)
+            self.executor.apply_safety(safety_updates)
+            changed.append("action_safety")
+        if maintenance is not None:
+            self.executor.set_maintenance(maintenance * 60)
+            changed.append("maintenance")
+
+        if changed:
+            self._persist_config(self.config)
+            self._record_event("settings_updated", "config", {"changed": changed})
+            log_event("info", "settings.update", "设置已更新", changed=changed)
+        return self.api_settings()
 
     def api_events(self, limit=50):
         items = self.state.events_snapshot(limit)
@@ -976,8 +1321,57 @@ class AgentApp:
             "payload": payload,
         }
 
-    def api_logs(self, limit=50):
-        return self.state.logs_snapshot(limit)
+    def api_logs(self, limit=200, level=None, event=None, guard_id=None, since=None):
+        limit = max(1, min(1000, int(limit)))
+        storage = self.config.get("storage") or {}
+        path = str(storage.get("log_path") or "")
+        backups = int(storage.get("log_backups") or 2)
+        if path and os.path.exists(path):
+            events = read_log_events(
+                path,
+                limit=limit,
+                level=level,
+                event=event,
+                guard_id=guard_id,
+                since=since,
+                backup_count=backups,
+            )
+            if events:
+                return events
+        return filter_events(
+            self.state.logs_snapshot(500),
+            level=level,
+            event=event,
+            guard_id=guard_id,
+            since=since,
+            limit=limit,
+        )
+
+    def api_logs_export(self, level=None, event=None, guard_id=None, since=None):
+        storage = self.config.get("storage") or {}
+        path = str(storage.get("log_path") or "")
+        backups = int(storage.get("log_backups") or 2)
+        data = b""
+        if path and os.path.exists(path):
+            data = export_log_events(
+                path,
+                level=level,
+                event=event,
+                guard_id=guard_id,
+                since=since,
+                backup_count=backups,
+            )
+        if data:
+            return data
+        items = filter_events(
+            self.state.logs_snapshot(500),
+            level=level,
+            event=event,
+            guard_id=guard_id,
+            since=since,
+        )
+        lines = [json.dumps(item, ensure_ascii=False, separators=(",", ":")) for item in items]
+        return ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
 
     def api_action(self, name, target=None):
         result = self.executor.execute(name, target)
@@ -993,12 +1387,14 @@ class AgentApp:
                 "exit_code": result.get("exit_code"),
             },
         )
-        LOGGER.info(
-            "手动动作 %s 目标=%s 结果=%s 原因=%s",
-            name,
-            target or "-",
-            result.get("result"),
-            result.get("reason") or "-",
+        log_event(
+            "info" if result.get("executed") else "warn",
+            "action.result",
+            "手动动作执行%s" % ("成功" if result.get("executed") else "被拒绝"),
+            manual=True,
+            action={"name": name, "target": target, "result": result.get("result")},
+            reason=result.get("reason"),
+            duration_ms=result.get("latency_ms"),
         )
         return result
 
@@ -1053,6 +1449,18 @@ class AgentApp:
             }
         self.state.add_event(stored)
 
+    def _log_throttled(self, key, level, event, msg, interval=60, **fields):
+        """同一类失败按间隔节流，并记录被抑制的次数。"""
+        now = time.monotonic()
+        last, suppressed = self._log_throttle.get(key, (0.0, 0))
+        if last and now - last < interval:
+            self._log_throttle[key] = (last, suppressed + 1)
+            return
+        self._log_throttle[key] = (now, 0)
+        if suppressed:
+            fields["suppressed"] = suppressed
+        log_event(level, event, msg, **fields)
+
     def _persist_config(self, config):
         if not self.config_path:
             return
@@ -1102,12 +1510,18 @@ class AgentApp:
                 checks_provider=self.api_checks,
                 events_provider=self.api_events,
                 logs_provider=self.api_logs,
+                logs_export_provider=self.api_logs_export,
                 action_handler=self.api_action,
                 session_ttl=int(httpd_cfg.get("session_ttl", 43200)),
                 login_max_failures=int(httpd_cfg.get("login_max_failures", 5)),
                 login_window=int(httpd_cfg.get("login_window", 60)),
                 guards_provider=self.api_guards,
                 guards_handler=self.api_guards_update,
+                modules_provider=self.api_modules,
+                script_import_handler=self.api_script_import,
+                script_delete_handler=self.api_script_delete,
+                settings_provider=self.api_settings,
+                settings_handler=self.api_settings_update,
             )
         except OSError as exc:
             LOGGER.error("本地 HTTP 服务启动失败：%s", exc)
@@ -1174,7 +1588,15 @@ def main(argv=None):
             config_path=config_path,
             httpd_enabled=not args.no_httpd and not args.once,
         )
-        configure_logging(args.log_level, config["storage"]["log_path"], app.state)
+        storage = config["storage"]
+        configure_logging(
+            args.log_level,
+            storage["log_path"],
+            app.state,
+            compress=bool(storage.get("log_compress", True)),
+            max_bytes=int(storage.get("log_max_bytes") or 2 * 1024 * 1024),
+            backups=int(storage.get("log_backups") or 2),
+        )
         if not app.storage_persistent:
             LOGGER.warning("持久化存储不可用，已回退到 /tmp，spool 与状态不会跨重启保留")
 

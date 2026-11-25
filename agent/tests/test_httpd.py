@@ -42,9 +42,14 @@ class HttpdTestBase(unittest.TestCase):
         items = [{"seq": index + 1, "type": "t"} for index in range(5)]
         return items[:limit]
 
-    def _logs(self, limit):
+    def _logs(self, limit, **filters):
         self.log_limits.append(limit)
+        self.log_filters = filters
         return [{"level": "INFO", "message": "hello"}][:limit]
+
+    def _logs_export(self, **filters):
+        self.export_filters = filters
+        return b'{"event":"guard.state","msg":"ok"}\n'
 
     def _action(self, name, target):
         self.action_calls.append((name, target))
@@ -70,6 +75,7 @@ class HttpdTestBase(unittest.TestCase):
             checks_provider=lambda: [{"layer": "net.carrier", "status": "ok"}],
             events_provider=self._events,
             logs_provider=self._logs,
+            logs_export_provider=self._logs_export,
             action_handler=self._action,
             login_max_failures=login_max_failures,
             login_window=60,
@@ -118,6 +124,17 @@ class HttpdTestBase(unittest.TestCase):
             except ValueError:
                 payload = raw.decode("utf-8", "replace")
         return status, payload, set_cookie, content_type
+
+    def request_raw(self, method, path, cookie=""):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        headers = {"Cookie": cookie} if cookie else {}
+        connection.request(method, path, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()
+        status = response.status
+        response_headers = {key: value for key, value in response.getheaders()}
+        connection.close()
+        return status, raw, response_headers
 
     def login(self, token="admin-token"):
         status, payload, set_cookie, _ctype = self.request(
@@ -196,6 +213,24 @@ class HttpdTestBase(unittest.TestCase):
         )
         self.assertEqual(status, 200)
         self.assertEqual(self.log_limits[-1], 3)
+
+        status, payload, _set_cookie, _ctype = self.request(
+            "GET", "/api/logs?level=warn&event=guard.&guard_id=abc&since=100",
+            cookie=cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            self.log_filters,
+            {"level": "warn", "event": "guard.", "guard_id": "abc", "since": 100.0},
+        )
+
+        status, body, headers = self.request_raw(
+            "GET", "/api/logs/export?level=warn&event=guard.", cookie=cookie
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("attachment", headers.get("Content-Disposition", ""))
+        self.assertIn(b"guard.state", body)
+        self.assertNotIn("limit", self.export_filters)
 
     def test_actions_require_auth_and_whitelist(self):
         status, _payload, _set_cookie, _ctype = self.request(

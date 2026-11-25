@@ -37,7 +37,7 @@ ALLOWED_ACTIONS = {
     "restart_service": {"requires_target": True, "risk": "L1"},
 }
 
-KNOWN_PROBES = {"carrier", "pppoe", "route", "dns", "http", "process", "port"}
+KNOWN_PROBES = {"carrier", "pppoe", "route", "dns", "http", "process", "port", "script"}
 
 
 class GuardConfigError(Exception):
