@@ -1,0 +1,25 @@
+{
+  "name": "vigil-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vigil 前端工作区（server-ui / client-ui / shared）",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "server-ui",
+    "client-ui"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w server-ui",
+    "dev:server-ui": "npm run dev -w server-ui",
+    "dev:client-ui": "npm run dev -w client-ui",
+    "build": "npm run build -w server-ui && npm run build -w client-ui",
+    "build:server-ui": "npm run build -w server-ui",
+    "build:client-ui": "npm run build -w client-ui",
+    "preview:server-ui": "npm run preview -w server-ui",
+    "preview:client-ui": "npm run preview -w client-ui"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
