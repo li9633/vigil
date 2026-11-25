@@ -1,0 +1,39 @@
+# 设计文档仅本地保留，不入库
+doc/
+
+# Node / 前端
+node_modules/
+dist/
+.vite/
+*.local
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# 构建产物与打包
+build/
+*.tar.gz
+*.ipk
+*.pyz
+
+# 部署与本地配置
+.env
+deploy/.env
+*.log
+
+# 本地数据库
+*.db
+*.db-shm
+*.db-wal
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
