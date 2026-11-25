@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import { faBars, faXmark } from '../icons'
+import ThemeToggle from './ThemeToggle.vue'
 
 withDefaults(
   defineProps<{
@@ -14,17 +17,39 @@ withDefaults(
 )
 
 const mobileOpen = ref(false)
+const scrolled = ref(false)
+
+function onScroll() {
+  scrolled.value = window.scrollY > 4
+}
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') mobileOpen.value = false
+}
+
+onMounted(() => {
+  window.addEventListener('scroll', onScroll, { passive: true })
+  window.addEventListener('keydown', onKeydown)
+  onScroll()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('scroll', onScroll)
+  window.removeEventListener('keydown', onKeydown)
+})
 </script>
 
 <template>
   <div class="shell" :class="{ 'mobile-open': mobileOpen }">
+    <a class="skip-link" href="#main-content">跳到主内容</a>
+
     <aside class="sidebar">
       <div class="sidebar-brand">
         <slot name="brand" />
       </div>
-      <div class="sidebar-nav" @click="mobileOpen = false">
+      <nav class="sidebar-nav" aria-label="主导航" @click="mobileOpen = false">
         <slot name="nav" />
-      </div>
+      </nav>
       <div v-if="footer || $slots.footer" class="sidebar-foot">
         <slot name="footer">{{ footer }}</slot>
       </div>
@@ -39,7 +64,7 @@ const mobileOpen = ref(false)
     ></button>
 
     <div class="main">
-      <header class="topbar">
+      <header class="topbar" :class="{ 'is-scrolled': scrolled }">
         <button
           class="menu-btn"
           type="button"
@@ -47,21 +72,33 @@ const mobileOpen = ref(false)
           :aria-expanded="mobileOpen"
           @click="mobileOpen = true"
         >
-          ☰
+          <FontAwesomeIcon :icon="faBars" fixed-width />
         </button>
         <div class="title-block">
           <h1 class="page-heading">{{ title }}</h1>
           <p v-if="subtitle" class="page-subheading">{{ subtitle }}</p>
         </div>
         <div class="actions">
+          <slot name="status" />
+          <ThemeToggle />
           <slot name="actions" />
         </div>
       </header>
 
-      <main class="content">
+      <main id="main-content" class="content" tabindex="-1">
         <slot />
       </main>
     </div>
+
+    <button
+      v-if="mobileOpen"
+      class="drawer-close"
+      type="button"
+      aria-label="关闭导航"
+      @click="mobileOpen = false"
+    >
+      <FontAwesomeIcon :icon="faXmark" fixed-width />
+    </button>
   </div>
 </template>
 
@@ -82,25 +119,32 @@ const mobileOpen = ref(false)
   width: var(--vigil-sidebar-width);
   height: 100vh;
   background: var(--vigil-color-sidebar-bg);
+  border-right: 1px solid var(--vigil-color-border);
   color: var(--vigil-color-sidebar-text);
 }
 
 .sidebar-brand {
-  padding: var(--vigil-space-4);
-  color: #fff;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 72px;
+  padding: 0 var(--vigil-space-5);
+  border-bottom: 1px solid var(--vigil-color-border);
 }
 
 .sidebar-nav {
   flex: 1;
   min-height: 0;
+  padding: var(--vigil-space-3) var(--vigil-space-2);
   overflow-y: auto;
 }
 
 .sidebar-foot {
-  padding: var(--vigil-space-3) var(--vigil-space-4);
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  font-size: 11px;
-  color: rgba(199, 210, 223, 0.5);
+  padding: var(--vigil-space-3) var(--vigil-space-5);
+  border-top: 1px solid var(--vigil-color-border);
+  font-size: var(--vigil-font-xxs);
+  letter-spacing: 0.04em;
+  color: var(--vigil-color-text-muted);
 }
 
 .main {
@@ -118,10 +162,20 @@ const mobileOpen = ref(false)
   align-items: center;
   gap: var(--vigil-space-3);
   height: var(--vigil-header-height);
-  padding: 0 var(--vigil-space-5);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(6px);
+  padding: 0 var(--vigil-space-6);
+  background: var(--vigil-color-topbar, var(--vigil-color-surface));
   border-bottom: 1px solid var(--vigil-color-border);
+  transition: box-shadow var(--vigil-transition), border-color var(--vigil-transition);
+
+  &.is-scrolled {
+    box-shadow: var(--vigil-shadow-sm);
+  }
+}
+
+@supports (backdrop-filter: blur(12px)) {
+  .topbar {
+    backdrop-filter: blur(12px);
+  }
 }
 
 .title-block {
@@ -158,21 +212,25 @@ const mobileOpen = ref(false)
   width: 100%;
   max-width: var(--vigil-content-max);
   margin: 0 auto;
-  padding: var(--vigil-space-5);
+  padding: 28px;
+
+  &:focus {
+    outline: none;
+  }
 }
 
-.menu-btn {
+.menu-btn,
+.drawer-close {
   display: none;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   border: 1px solid var(--vigil-color-border);
   border-radius: var(--vigil-radius-sm);
   background: var(--vigil-color-surface);
   color: var(--vigil-color-text);
-  font-size: 16px;
-  line-height: 1;
+  font-size: 15px;
   cursor: pointer;
 }
 
@@ -184,8 +242,9 @@ const mobileOpen = ref(false)
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
+    z-index: 50;
     transform: translateX(-100%);
-    transition: transform var(--vigil-transition);
+    transition: transform 240ms var(--vigil-ease-out);
   }
 
   .mobile-open .sidebar {
@@ -199,10 +258,18 @@ const mobileOpen = ref(false)
   .scrim {
     position: fixed;
     inset: 0;
-    z-index: 25;
+    z-index: 45;
     display: block;
     border: none;
-    background: rgba(17, 28, 46, 0.42);
+    background: var(--vigil-color-overlay);
+  }
+
+  .drawer-close {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 55;
+    display: inline-flex;
   }
 
   .topbar {
@@ -210,11 +277,17 @@ const mobileOpen = ref(false)
   }
 
   .content {
+    padding: var(--vigil-space-5);
+  }
+}
+
+@media (max-width: 640px) {
+  .content {
     padding: var(--vigil-space-4);
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 420px) {
   .content {
     padding: var(--vigil-space-3);
   }

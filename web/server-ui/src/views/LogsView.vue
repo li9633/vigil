@@ -7,6 +7,7 @@ import {
   TimeText,
   getErrorMessage,
   unwrapList,
+  copyText,
   type ServerLogEntry,
   type ServerLogQuery,
 } from '@vigil/shared'
@@ -55,6 +56,18 @@ const levelOptions = [
 ]
 
 const sortedLogs = computed(() => [...logs.value].reverse())
+
+function queryEventHints(
+  query: string,
+  callback: (items: Array<{ value: string }>) => void,
+) {
+  const keyword = query.trim().toLowerCase()
+  callback(
+    EVENT_HINTS.filter((hint) => !keyword || hint.toLowerCase().includes(keyword)).map(
+      (value) => ({ value }),
+    ),
+  )
+}
 
 function levelStatus(value: string): string {
   const normalized = String(value || '').toLowerCase()
@@ -107,10 +120,9 @@ function exportLogs() {
 
 async function copy(value?: string) {
   if (!value) return
-  try {
-    await navigator.clipboard.writeText(value)
+  if (await copyText(value)) {
     ElMessage.success('已复制')
-  } catch {
+  } else {
     ElMessage.warning('复制失败，请手动选择')
   }
 }
@@ -134,7 +146,6 @@ onMounted(load)
         <p class="page-sub">共 {{ logs.length }} 条 · 合并 api / worker 两个实例</p>
       </div>
       <div class="head-actions">
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
         <el-button size="small" type="primary" plain @click="exportLogs">导出</el-button>
       </div>
     </div>
@@ -163,18 +174,16 @@ onMounted(load)
           </label>
           <label class="field">
             <span class="field-label">事件前缀</span>
-            <el-input
+            <el-autocomplete
               v-model="event"
               size="small"
               clearable
+              :fetch-suggestions="queryEventHints"
               placeholder="如 incident. 或 notify."
-              list="server-log-event-hints"
               @keyup.enter="load"
               @clear="load"
+              @select="load"
             />
-            <datalist id="server-log-event-hints">
-              <option v-for="hint in EVENT_HINTS" :key="hint" :value="hint" />
-            </datalist>
           </label>
           <label class="field">
             <span class="field-label">客户端</span>
@@ -328,7 +337,7 @@ onMounted(load)
 
 .field-label {
   color: var(--vigil-color-text-muted);
-  font-size: var(--vigil-font-size-sm);
+  font-size: var(--vigil-font-sm);
 }
 
 .log-list {
@@ -366,11 +375,11 @@ onMounted(load)
   border: 1px solid var(--vigil-color-border);
   border-radius: var(--vigil-radius-sm);
   color: var(--vigil-color-text-muted);
-  font-size: 11px;
+  font-size: var(--vigil-font-xxs);
 }
 
 .event-name {
-  font-size: var(--vigil-font-size-sm);
+  font-size: var(--vigil-font-sm);
   font-weight: 600;
   word-break: break-all;
 }
@@ -378,7 +387,7 @@ onMounted(load)
 .log-time {
   flex: 0 0 auto;
   color: var(--vigil-color-text-muted);
-  font-size: var(--vigil-font-size-sm);
+  font-size: var(--vigil-font-sm);
 }
 
 .log-msg {
@@ -393,7 +402,7 @@ onMounted(load)
   gap: var(--vigil-space-3);
   margin-top: var(--vigil-space-1);
   color: var(--vigil-color-text-muted);
-  font-size: var(--vigil-font-size-sm);
+  font-size: var(--vigil-font-sm);
   word-break: break-all;
 }
 
@@ -417,7 +426,7 @@ onMounted(load)
   summary {
     color: var(--vigil-color-text-muted);
     cursor: pointer;
-    font-size: var(--vigil-font-size-sm);
+    font-size: var(--vigil-font-sm);
   }
 
   pre {
@@ -425,7 +434,7 @@ onMounted(load)
     margin: var(--vigil-space-2) 0 0;
     padding: var(--vigil-space-2);
     overflow: auto;
-    background: var(--vigil-color-surface-muted, rgba(127, 127, 127, 0.08));
+    background: var(--vigil-color-surface-muted);
     border-radius: var(--vigil-radius-sm);
     font-size: 12px;
     white-space: pre-wrap;

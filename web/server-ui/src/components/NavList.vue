@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import { navIcons } from '@vigil/shared'
 
 interface NavItem {
   to: string
@@ -7,14 +9,32 @@ interface NavItem {
   milestone?: string
 }
 
-const items: NavItem[] = [
-  { to: '/', label: '总览' },
-  { to: '/clients', label: '客户端' },
-  { to: '/incidents', label: '告警中心' },
-  { to: '/notifications', label: '通知配置', milestone: 'M2' },
-  { to: '/settings', label: '策略配置', milestone: 'M3' },
-  { to: '/audit', label: '审计日志', milestone: 'M3' },
-  { to: '/logs', label: '服务端日志' },
+interface NavGroup {
+  title: string
+  items: NavItem[]
+}
+
+const groups: NavGroup[] = [
+  {
+    title: '监控',
+    items: [
+      { to: '/', label: '总览' },
+      { to: '/clients', label: '客户端' },
+      { to: '/incidents', label: '告警中心' },
+    ],
+  },
+  {
+    title: '配置',
+    items: [
+      { to: '/notifications', label: '通知配置', milestone: 'M2' },
+      { to: '/settings', label: '策略配置', milestone: 'M3' },
+      { to: '/audit', label: '审计日志', milestone: 'M3' },
+    ],
+  },
+  {
+    title: '系统',
+    items: [{ to: '/logs', label: '服务端日志' }],
+  },
 ]
 
 const route = useRoute()
@@ -25,19 +45,27 @@ function isActive(to: string): boolean {
 </script>
 
 <template>
-  <nav class="nav-list" aria-label="主导航">
-    <router-link
-      v-for="item in items"
-      :key="item.to"
-      :to="item.to"
-      class="nav-item"
-      :class="{ active: isActive(item.to) }"
-    >
-      <span class="nav-dot" aria-hidden="true"></span>
-      <span class="nav-label">{{ item.label }}</span>
-      <span v-if="item.milestone" class="nav-badge">{{ item.milestone }}</span>
-    </router-link>
-  </nav>
+  <div class="nav-list">
+    <template v-for="group in groups" :key="group.title">
+      <p class="nav-group">{{ group.title }}</p>
+      <router-link
+        v-for="item in group.items"
+        :key="item.to"
+        :to="item.to"
+        class="nav-item"
+        :class="{ active: isActive(item.to) }"
+      >
+        <FontAwesomeIcon
+          class="nav-icon"
+          :icon="navIcons[item.label]"
+          fixed-width
+          aria-hidden="true"
+        />
+        <span class="nav-label">{{ item.label }}</span>
+        <span v-if="item.milestone" class="nav-badge">{{ item.milestone }}</span>
+      </router-link>
+    </template>
+  </div>
 </template>
 
 <style scoped lang="scss">
@@ -45,57 +73,86 @@ function isActive(to: string): boolean {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--vigil-space-2) var(--vigil-space-2);
+}
+
+.nav-group {
+  padding: var(--vigil-space-4) var(--vigil-space-3) var(--vigil-space-1);
+  font-size: var(--vigil-font-xxs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vigil-color-text-muted);
 }
 
 .nav-item {
   position: relative;
   display: flex;
   align-items: center;
-  gap: var(--vigil-space-2);
-  padding: 10px 12px;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 var(--vigil-space-3);
   border-radius: var(--vigil-radius-sm);
   color: var(--vigil-color-sidebar-text);
   font-size: var(--vigil-font-sm);
   transition: background var(--vigil-transition), color var(--vigil-transition);
 
   &:hover {
-    background: rgba(255, 255, 255, 0.06);
-    color: #fff;
+    background: var(--vigil-color-sidebar-hover);
+    color: var(--vigil-color-text);
   }
 
   &.active {
-    background: rgba(37, 99, 235, 0.22);
-    color: #fff;
+    background: var(--vigil-color-sidebar-active);
+    color: var(--vigil-color-text);
     font-weight: 600;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 8px;
+      bottom: 8px;
+      left: 0;
+      width: 3px;
+      border-radius: 2px;
+      background: var(--vigil-gradient-brand);
+    }
   }
 }
 
-.nav-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.45;
+.nav-icon {
   flex: 0 0 auto;
+  width: 18px;
+  font-size: 16px;
+  text-align: center;
+  opacity: 0.75;
 }
 
-.nav-item.active .nav-dot {
+.nav-item.active .nav-icon {
+  color: var(--vigil-color-primary);
   opacity: 1;
-  background: #93b4ff;
 }
 
 .nav-label {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-badge {
   padding: 0 5px;
+  border: 1px solid var(--vigil-color-border-strong);
   border-radius: var(--vigil-radius-sm);
-  border: 1px solid rgba(255, 255, 255, 0.24);
   font-size: 10px;
-  line-height: 16px;
-  color: rgba(255, 255, 255, 0.72);
+  line-height: 15px;
+  font-weight: 500;
+  color: var(--vigil-color-text-muted);
+}
+
+@media (max-width: 900px) {
+  .nav-item {
+    min-height: 44px;
+  }
 }
 </style>

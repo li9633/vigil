@@ -80,11 +80,17 @@ async function submit() {
 
         <el-form ref="formRef" :model="form" :rules="rules" label-position="top" @submit.prevent="submit">
           <el-form-item label="用户名" prop="username">
-            <el-input v-model="form.username" autocomplete="username" placeholder="admin" />
+            <el-input
+              v-model="form.username"
+              size="large"
+              autocomplete="username"
+              placeholder="admin"
+            />
           </el-form-item>
           <el-form-item label="密码" prop="password">
             <el-input
               v-model="form.password"
+              size="large"
               type="password"
               show-password
               autocomplete="current-password"
@@ -111,20 +117,37 @@ async function submit() {
 }
 
 .brand-panel {
+  position: relative;
   display: flex;
+  flex: 0 0 55%;
   flex-direction: column;
   justify-content: center;
-  flex: 0 0 44%;
+  overflow: hidden;
   padding: var(--vigil-space-9);
-  color: #fff;
-  background:
-    radial-gradient(circle at 20% 15%, rgba(56, 189, 248, 0.28), transparent 42%),
-    linear-gradient(155deg, #0b1626 0%, #111c2e 55%, #172a44 100%);
+  background: var(--vigil-color-brand-panel);
+  color: var(--vigil-color-brand-panel-text);
+
+  &::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: var(--vigil-glow-primary), var(--vigil-glow-accent);
+    pointer-events: none;
+  }
+
+  > * {
+    position: relative;
+  }
 
   h1 {
     margin: var(--vigil-space-4) 0 var(--vigil-space-1);
     font-size: var(--vigil-font-xxl);
-    letter-spacing: 0.08em;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: transparent;
+    background: var(--vigil-gradient-brand);
+    -webkit-background-clip: text;
+    background-clip: text;
   }
 }
 
@@ -135,38 +158,40 @@ async function submit() {
   width: 52px;
   height: 52px;
   border-radius: var(--vigil-radius-md);
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
+  background: var(--vigil-gradient-brand);
+  color: var(--vigil-color-on-primary);
   font-size: 26px;
   font-weight: 700;
+  box-shadow: var(--vigil-shadow-glow);
 }
 
 .tagline {
   margin: 0 0 var(--vigil-space-6);
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--vigil-color-brand-panel-muted);
   font-size: var(--vigil-font-md);
 }
 
 .brand-points {
-  margin: 0;
-  padding: 0;
-  list-style: none;
   display: flex;
   flex-direction: column;
   gap: var(--vigil-space-2);
-  color: rgba(255, 255, 255, 0.82);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--vigil-color-brand-panel-text);
   font-size: var(--vigil-font-sm);
 
   li::before {
     content: '—';
     margin-right: var(--vigil-space-2);
-    color: #60a5fa;
+    color: var(--vigil-color-accent);
   }
 }
 
 .brand-foot {
   margin-top: var(--vigil-space-7);
   font-size: var(--vigil-font-xs);
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--vigil-color-brand-panel-muted);
 }
 
 .form-panel {
@@ -179,12 +204,12 @@ async function submit() {
 
 .form-card {
   width: 100%;
-  max-width: 380px;
-  padding: var(--vigil-space-6);
+  max-width: 360px;
+  padding: var(--vigil-space-7);
   background: var(--vigil-color-surface);
   border: 1px solid var(--vigil-color-border);
   border-radius: var(--vigil-radius-lg);
-  box-shadow: var(--vigil-shadow-md);
+  box-shadow: var(--vigil-shadow-lg);
 
   h2 {
     font-size: var(--vigil-font-lg);
@@ -208,18 +233,19 @@ async function submit() {
 
 .form-tip {
   margin: var(--vigil-space-4) 0 0;
-  font-size: 11px;
+  font-size: var(--vigil-font-xxs);
   color: var(--vigil-color-text-muted);
   text-align: center;
 }
 
-@media (max-width: 860px) {
+@media (max-width: 900px) {
   .brand-panel {
     display: none;
   }
 
   .form-panel {
     padding: var(--vigil-space-4);
+    background: var(--vigil-glow-primary);
   }
 }
 </style>

@@ -1,20 +1,42 @@
 <script setup lang="ts">
 import { useRoute } from 'vue-router'
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import { navIcons } from '@vigil/shared'
 
 interface NavItem {
   to: string
   label: string
 }
 
-const items: NavItem[] = [
-  { to: '/', label: '状态' },
-  { to: '/guards', label: '守护项' },
-  { to: '/checks', label: '检测项' },
-  { to: '/events', label: '事件' },
-  { to: '/actions', label: '手动动作' },
-  { to: '/modules', label: '模块管理' },
-  { to: '/logs', label: '日志' },
-  { to: '/settings', label: '设置' },
+interface NavGroup {
+  title: string
+  items: NavItem[]
+}
+
+const groups: NavGroup[] = [
+  {
+    title: '监控',
+    items: [
+      { to: '/', label: '状态' },
+      { to: '/guards', label: '守护项' },
+      { to: '/checks', label: '检测项' },
+      { to: '/events', label: '事件' },
+    ],
+  },
+  {
+    title: '操作',
+    items: [
+      { to: '/actions', label: '手动动作' },
+      { to: '/modules', label: '模块管理' },
+    ],
+  },
+  {
+    title: '系统',
+    items: [
+      { to: '/logs', label: '日志' },
+      { to: '/settings', label: '设置' },
+    ],
+  },
 ]
 
 const route = useRoute()
@@ -25,18 +47,26 @@ function isActive(to: string): boolean {
 </script>
 
 <template>
-  <nav class="nav-list" aria-label="客户端导航">
-    <router-link
-      v-for="item in items"
-      :key="item.to"
-      :to="item.to"
-      class="nav-item"
-      :class="{ active: isActive(item.to) }"
-    >
-      <span class="nav-dot" aria-hidden="true"></span>
-      <span class="nav-label">{{ item.label }}</span>
-    </router-link>
-  </nav>
+  <div class="nav-list">
+    <template v-for="group in groups" :key="group.title">
+      <p class="nav-group">{{ group.title }}</p>
+      <router-link
+        v-for="item in group.items"
+        :key="item.to"
+        :to="item.to"
+        class="nav-item"
+        :class="{ active: isActive(item.to) }"
+      >
+        <FontAwesomeIcon
+          class="nav-icon"
+          :icon="navIcons[item.label]"
+          fixed-width
+          aria-hidden="true"
+        />
+        <span class="nav-label">{{ item.label }}</span>
+      </router-link>
+    </template>
+  </div>
 </template>
 
 <style scoped lang="scss">
@@ -44,47 +74,76 @@ function isActive(to: string): boolean {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: var(--vigil-space-2);
+}
+
+.nav-group {
+  padding: var(--vigil-space-4) var(--vigil-space-3) var(--vigil-space-1);
+  font-size: var(--vigil-font-xxs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--vigil-color-text-muted);
 }
 
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--vigil-space-2);
-  padding: 10px 12px;
+  gap: 10px;
+  min-height: 40px;
+  padding: 0 var(--vigil-space-3);
   border-radius: var(--vigil-radius-sm);
   color: var(--vigil-color-sidebar-text);
   font-size: var(--vigil-font-sm);
   transition: background var(--vigil-transition), color var(--vigil-transition);
 
   &:hover {
-    background: rgba(255, 255, 255, 0.06);
-    color: #fff;
+    background: var(--vigil-color-sidebar-hover);
+    color: var(--vigil-color-text);
   }
 
   &.active {
-    background: rgba(37, 99, 235, 0.22);
-    color: #fff;
+    background: var(--vigil-color-sidebar-active);
+    color: var(--vigil-color-text);
     font-weight: 600;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: 8px;
+      bottom: 8px;
+      left: 0;
+      width: 3px;
+      border-radius: 2px;
+      background: var(--vigil-gradient-brand);
+    }
   }
 }
 
-.nav-dot {
+.nav-icon {
   flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0.45;
+  width: 18px;
+  font-size: 16px;
+  text-align: center;
+  opacity: 0.75;
 }
 
-.nav-item.active .nav-dot {
-  background: #93b4ff;
+.nav-item.active .nav-icon {
+  color: var(--vigil-color-primary);
   opacity: 1;
 }
 
 .nav-label {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .nav-item {
+    min-height: 44px;
+  }
 }
 </style>

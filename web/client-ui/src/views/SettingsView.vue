@@ -5,7 +5,9 @@ import {
   StatusTag,
   TimeText,
   getErrorMessage,
+  useTheme,
   type ClientSettingsSnapshot,
+  type ThemeMode,
 } from '@vigil/shared'
 import { ElMessage } from 'element-plus'
 import { clientApi } from '@/api/client'
@@ -85,6 +87,12 @@ async function setMaintenance(minutes: number) {
   }
 }
 
+const { mode, resolved, setTheme } = useTheme()
+
+function changeTheme(value: string | number | boolean) {
+  setTheme(String(value) as ThemeMode)
+}
+
 onMounted(load)
 </script>
 
@@ -108,6 +116,23 @@ onMounted(load)
     <LoadingBlock v-if="loading && !data" min-height="180px" text="正在读取设置…" />
 
     <template v-else-if="data">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h3 class="panel-title">外观</h3>
+            <p class="panel-sub">默认跟随系统；顶栏按钮可快速切换深色 / 浅色</p>
+          </div>
+          <span class="muted">当前：{{ resolved === 'dark' ? '深色' : '浅色' }}</span>
+        </div>
+        <div class="panel-body">
+          <el-radio-group :model-value="mode" size="small" @change="changeTheme">
+            <el-radio-button value="auto">跟随系统</el-radio-button>
+            <el-radio-button value="light">浅色</el-radio-button>
+            <el-radio-button value="dark">深色</el-radio-button>
+          </el-radio-group>
+        </div>
+      </div>
+
       <div class="panel">
         <div class="panel-head">
           <div>
@@ -250,6 +275,12 @@ onMounted(load)
 </template>
 
 <style scoped lang="scss">
+.panel-sub {
+  margin: 4px 0 0;
+  font-size: var(--vigil-font-xxs);
+  color: var(--vigil-color-text-muted);
+}
+
 .alert-row {
   display: flex;
   align-items: center;

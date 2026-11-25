@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { EmptyState, StatusTag, TimeText, getErrorMessage, unwrapList, type Client } from '@vigil/shared'
+import {
+  EmptyState,
+  LiveBadge,
+  RefreshFab,
+  StatusTag,
+  TimeText,
+  getErrorMessage,
+  unwrapList,
+  usePolling,
+  type Client,
+} from '@vigil/shared'
 import { adminApi } from '@/api/admin'
 
 const router = useRouter()
@@ -59,17 +69,20 @@ function resetFilters() {
   stateFilter.value = ''
 }
 
-onMounted(load)
+const poll = usePolling(load, {
+  interval: 15000,
+  isError: () => Boolean(error.value),
+})
 </script>
 
 <template>
-  <div class="page">
+  <div class="page pb-fab">
     <div class="page-head">
       <div>
         <h2 class="page-title">客户端</h2>
         <p class="page-sub">共 {{ clients.length }} 台设备，当前筛选 {{ filtered.length }} 台</p>
       </div>
-      <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
     </div>
 
     <div class="panel">
@@ -97,7 +110,7 @@ onMounted(load)
         :closable="false"
       >
         <span>{{ error }}</span>
-        <el-button size="small" text type="primary" @click="load">重试</el-button>
+        <el-button size="small" text type="primary" @click="poll.retry">重试</el-button>
       </el-alert>
 
       <div class="panel-body panel-body--flush">
@@ -157,6 +170,13 @@ onMounted(load)
         </el-table>
       </div>
     </div>
+
+    <RefreshFab
+      :loading="poll.refreshing"
+      :paused="poll.paused"
+      :error="Boolean(error)"
+      @refresh="poll.refresh"
+    />
   </div>
 </template>
 

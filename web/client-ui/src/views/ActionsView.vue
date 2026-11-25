@@ -180,7 +180,7 @@ onBeforeUnmount(() => {
 
 .risk-tag {
   padding: 0 5px;
-  border: 1px solid rgba(220, 38, 38, 0.3);
+  border: 1px solid var(--vigil-color-critical);
   border-radius: var(--vigil-radius-sm);
   color: var(--vigil-color-critical);
   background: var(--vigil-color-critical-weak);

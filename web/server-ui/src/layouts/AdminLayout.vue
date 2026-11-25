@@ -58,13 +58,14 @@ function logout() {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--vigil-radius-sm);
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  color: #fff;
+  background: var(--vigil-gradient-brand);
+  color: var(--vigil-color-on-primary);
   font-size: var(--vigil-font-md);
   font-weight: 700;
+  box-shadow: var(--vigil-shadow-glow);
 }
 
 .brand-text {
@@ -75,11 +76,12 @@ function logout() {
   strong {
     font-size: var(--vigil-font-md);
     letter-spacing: 0.04em;
+    color: var(--vigil-color-text);
   }
 
   small {
-    font-size: 11px;
-    color: rgba(199, 210, 223, 0.72);
+    font-size: var(--vigil-font-xxs);
+    color: var(--vigil-color-text-muted);
   }
 }
 

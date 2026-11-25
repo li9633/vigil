@@ -1,0 +1,322 @@
+// Vigil 全局基础样式：复位、排版、滚动条、焦点环、通用工具类
+@use 'tokens';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--vigil-font-family);
+  font-size: var(--vigil-font-base);
+  line-height: 1.6;
+  color: var(--vigil-color-text);
+  background: var(--vigil-color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--vigil-transition), color var(--vigil-transition);
+}
+
+a {
+  color: var(--vigil-color-primary);
+  text-decoration: none;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+p {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  color: var(--vigil-color-text);
+  background: var(--vigil-color-primary-weak);
+}
+
+// ---------- 滚动条 ----------
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--vigil-color-border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--vigil-color-border-strong);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+  border-radius: var(--vigil-radius-pill);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+// ---------- 焦点环 ----------
+:focus-visible {
+  outline: 3px solid var(--vigil-color-focus);
+  outline-offset: 2px;
+}
+
+// ---------- 跳到主内容 ----------
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  padding: 8px 14px;
+  border-radius: var(--vigil-radius-sm);
+  background: var(--vigil-color-surface-raised);
+  border: 1px solid var(--vigil-color-border);
+  box-shadow: var(--vigil-shadow-md);
+  color: var(--vigil-color-text);
+  font-size: var(--vigil-font-sm);
+  transform: translateY(-160%);
+  transition: transform var(--vigil-transition);
+
+  &:focus-visible {
+    transform: translateY(0);
+  }
+}
+
+// ---------- 页面骨架 ----------
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vigil-space-4);
+  animation: vigil-fade-in 120ms ease both;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--vigil-space-3);
+}
+
+// 页面标题统一由顶栏承载，避免重复
+.page-head .page-title {
+  display: none;
+}
+
+.page-title {
+  font-size: var(--vigil-font-lg);
+  line-height: 1.4;
+}
+
+.page-sub {
+  margin: var(--vigil-space-1) 0 0;
+  font-size: var(--vigil-font-xs);
+  color: var(--vigil-color-text-muted);
+}
+
+// ---------- 面板 ----------
+.panel {
+  overflow: hidden;
+  background: var(--vigil-color-surface);
+  border: 1px solid var(--vigil-color-border);
+  border-radius: var(--vigil-radius-md);
+  box-shadow: var(--vigil-shadow-sm);
+}
+
+.panel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vigil-space-2);
+  min-height: 48px;
+  padding: var(--vigil-space-3) var(--vigil-space-4);
+  border-bottom: 1px solid var(--vigil-color-border);
+}
+
+.panel-title {
+  font-size: var(--vigil-font-base);
+  font-weight: 600;
+}
+
+.panel-body {
+  padding: var(--vigil-space-4);
+}
+
+.panel-body--flush {
+  padding: 0;
+}
+
+// ---------- 统计卡（StatCard 组件的无组件回退样式） ----------
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: var(--vigil-space-3);
+}
+
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--vigil-space-1);
+  padding: var(--vigil-space-4);
+  background: var(--vigil-color-surface);
+  border: 1px solid var(--vigil-color-border);
+  border-radius: var(--vigil-radius-md);
+  box-shadow: var(--vigil-shadow-sm);
+}
+
+.stat-label {
+  font-size: var(--vigil-font-xs);
+  color: var(--vigil-color-text-muted);
+}
+
+.stat-value {
+  font-family: var(--vigil-font-mono);
+  font-size: var(--vigil-font-xl);
+  font-weight: 650;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-hint {
+  font-size: var(--vigil-font-xs);
+  color: var(--vigil-color-text-muted);
+}
+
+.tone-ok .stat-value {
+  color: var(--vigil-color-ok);
+}
+
+.tone-warn .stat-value {
+  color: var(--vigil-color-warn);
+}
+
+.tone-critical .stat-value {
+  color: var(--vigil-color-critical);
+}
+
+// ---------- 工具类 ----------
+.pb-fab {
+  padding-bottom: 88px;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--vigil-space-2);
+}
+
+.muted {
+  color: var(--vigil-color-text-muted);
+}
+
+.mono {
+  font-family: var(--vigil-font-mono);
+  font-size: var(--vigil-font-xs);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.num {
+  font-family: var(--vigil-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.text-critical {
+  color: var(--vigil-color-critical);
+}
+
+.error-box {
+  margin-bottom: var(--vigil-space-3);
+}
+
+.link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vigil-color-primary);
+  font-size: inherit;
+  cursor: pointer;
+
+  &:disabled {
+    color: var(--vigil-color-text-muted);
+    cursor: not-allowed;
+  }
+}
+
+// ---------- 动效 ----------
+@keyframes vigil-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes vigil-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes vigil-pulse {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+    opacity: 0.9;
+  }
+  70% {
+    box-shadow: 0 0 0 5px transparent;
+    opacity: 1;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .page {
+    animation: none;
+  }
+}

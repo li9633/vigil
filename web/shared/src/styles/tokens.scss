@@ -1,31 +1,118 @@
-// Vigil 设计令牌：颜色 / 间距 / 字号 / 圆角 / 阴影
-// 通过 SCSS map 统一生成 CSS 变量，组件只消费 var(--vigil-*)
+// Vigil 设计令牌：双主题（浅色「晨纸」/ 深色「夜空」）
+// 仅本文件允许出现十六进制色值，组件一律消费 var(--vigil-*)
 
-$colors: (
-  bg: #f5f7fa,
-  surface: #ffffff,
-  surface-alt: #f0f2f5,
-  border: #e4e7ed,
-  border-strong: #cdd4dc,
-  text: #1f2d3d,
-  text-secondary: #55657a,
-  text-muted: #8a97a6,
-  primary: #2563eb,
-  primary-hover: #1d4ed8,
-  primary-weak: #e8efff,
-  ok: #16a34a,
-  ok-weak: #e9f8ef,
-  warn: #d97706,
-  warn-weak: #fdf3e3,
-  critical: #dc2626,
-  critical-weak: #fdecec,
-  unknown: #6b7280,
-  unknown-weak: #f1f3f5,
-  sidebar-bg: #111c2e,
-  sidebar-text: #c7d2df,
-  sidebar-active: #1d4ed8,
+// ---------- 主题色板 ----------
+$light: (
+  'color-bg': #f6f3ec,
+  'color-surface': #fffdf8,
+  'color-surface-alt': #f1ede3,
+  'color-surface-raised': #ffffff,
+  'color-surface-muted': #efeae1,
+  'color-bg-subtle': #f1ede3,
+  'color-overlay': rgba(36, 29, 20, 0.36),
+  'color-border': #e5dfd2,
+  'color-border-strong': #d3cab8,
+  'color-text': #241d14,
+  'color-text-secondary': #5f5648,
+  'color-text-muted': #6f6659,
+  'color-primary': #1d4ed8,
+  'color-primary-solid': #2563eb,
+  'color-primary-hover': #1e40af,
+  'color-primary-weak': #e3edff,
+  'color-on-primary': #ffffff,
+  'color-accent': #0369a1,
+  'color-ok': #0f7b57,
+  'color-ok-weak': #e4f5ee,
+  'color-warn': #a65a00,
+  'color-warn-weak': #fbf0df,
+  'color-critical': #c0264a,
+  'color-critical-weak': #fbe7ec,
+  'color-unknown': #6b7280,
+  'color-unknown-weak': #f0f1f3,
+  'color-info': #0e7490,
+  'color-info-weak': #e7f8fb,
+  'color-sidebar-bg': #fffdf8,
+  'color-sidebar-text': #5f5648,
+  'color-sidebar-active': rgba(37, 99, 235, 0.1),
+  'color-sidebar-hover': rgba(36, 29, 20, 0.04),
+  'color-topbar': rgba(255, 253, 248, 0.92),
+  'color-brand-panel': #0b0912,
+  'color-brand-panel-text': #f2eff7,
+  'color-brand-panel-muted': #b7b1c6,
+  'color-focus': rgba(29, 78, 216, 0.35),
+  'shadow-sm': (0 1px 2px rgba(60, 44, 20, 0.05), 0 2px 6px rgba(60, 44, 20, 0.04)),
+  'shadow-md': (0 2px 4px rgba(60, 44, 20, 0.05), 0 12px 32px rgba(60, 44, 20, 0.08)),
+  'shadow-lg': 0 24px 64px rgba(60, 44, 20, 0.14),
+  'shadow-glow': (0 0 0 1px rgba(37, 99, 235, 0.18), 0 8px 28px rgba(37, 99, 235, 0.16)),
+  'gradient-brand': linear-gradient(120deg, #7cb3ff 0%, #2563eb 55%, #38bdf8 100%),
+  'glow-primary': radial-gradient(circle at 30% 20%, rgba(37, 99, 235, 0.1), transparent 60%),
+  'glow-accent': radial-gradient(circle at 70% 0%, rgba(56, 189, 248, 0.08), transparent 55%),
+  'dot-grid': radial-gradient(circle, rgba(60, 44, 20, 0.08) 1px, transparent 1px),
+  'chart-1': #2563eb,
+  'chart-2': #0369a1,
+  'chart-3': #c77a0a,
+  'chart-4': #c0264a,
+  'chart-5': #64748b,
+  'chart-grid': rgba(36, 29, 20, 0.09),
+  'chart-axis': #6f6659,
 );
 
+$dark: (
+  'color-bg': #0b0912,
+  'color-surface': #131020,
+  'color-surface-alt': #1a1628,
+  'color-surface-raised': #201b30,
+  'color-surface-muted': #1a1628,
+  'color-bg-subtle': #1a1628,
+  'color-overlay': rgba(6, 4, 12, 0.72),
+  'color-border': #262133,
+  'color-border-strong': #3a3350,
+  'color-text': #f2eff7,
+  'color-text-secondary': #b7b1c6,
+  'color-text-muted': #918aa3,
+  'color-primary': #7cb3ff,
+  'color-primary-solid': #2563eb,
+  'color-primary-hover': #a9cbff,
+  'color-primary-weak': rgba(37, 99, 235, 0.18),
+  'color-on-primary': #ffffff,
+  'color-accent': #38bdf8,
+  'color-ok': #3ddc97,
+  'color-ok-weak': rgba(61, 220, 151, 0.12),
+  'color-warn': #f6c177,
+  'color-warn-weak': rgba(246, 193, 119, 0.12),
+  'color-critical': #ff7a90,
+  'color-critical-weak': rgba(255, 122, 144, 0.14),
+  'color-unknown': #8c93a3,
+  'color-unknown-weak': rgba(140, 147, 163, 0.12),
+  'color-info': #67e8f9,
+  'color-info-weak': rgba(103, 232, 249, 0.12),
+  'color-sidebar-bg': #0e0b17,
+  'color-sidebar-text': #a9a2bc,
+  'color-sidebar-active': rgba(37, 99, 235, 0.22),
+  'color-sidebar-hover': rgba(255, 255, 255, 0.05),
+  'color-topbar': rgba(19, 16, 32, 0.92),
+  'color-brand-panel': #0b0912,
+  'color-brand-panel-text': #f2eff7,
+  'color-brand-panel-muted': #b7b1c6,
+  'color-focus': rgba(124, 179, 255, 0.55),
+  'shadow-sm': (0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 2px 8px rgba(0, 0, 0, 0.28)),
+  'shadow-md': (0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 12px 32px rgba(0, 0, 0, 0.45)),
+  'shadow-lg': 0 24px 64px rgba(0, 0, 0, 0.55),
+  'shadow-glow': (0 0 0 1px rgba(37, 99, 235, 0.28), 0 8px 32px rgba(37, 99, 235, 0.22)),
+  'gradient-brand': linear-gradient(120deg, #7cb3ff 0%, #2563eb 55%, #38bdf8 100%),
+  'glow-primary': radial-gradient(circle at 30% 20%, rgba(37, 99, 235, 0.22), transparent 60%),
+  'glow-accent': radial-gradient(circle at 70% 0%, rgba(56, 189, 248, 0.1), transparent 55%),
+  'dot-grid': radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+  'chart-1': #7cb3ff,
+  'chart-2': #38bdf8,
+  'chart-3': #f6c177,
+  'chart-4': #ff7a90,
+  'chart-5': #94a3b8,
+  'chart-grid': rgba(255, 255, 255, 0.07),
+  'chart-axis': #918aa3,
+);
+
+// ---------- 与主题无关的尺度令牌 ----------
 $spacing: (
   1: 4px,
   2: 8px,
@@ -39,26 +126,34 @@ $spacing: (
 );
 
 $font-sizes: (
+  xxs: 11px,
   xs: 12px,
   sm: 13px,
   base: 14px,
   md: 16px,
   lg: 20px,
-  xl: 26px,
-  xxl: 32px,
+  xl: 28px,
+  xxl: 36px,
 );
 
 $radii: (
-  sm: 6px,
-  md: 10px,
-  lg: 14px,
+  sm: 8px,
+  md: 12px,
+  lg: 16px,
+  xl: 24px,
   pill: 999px,
 );
 
-:root {
-  @each $name, $value in $colors {
-    --vigil-color-#{$name}: #{$value};
+@mixin vigil-theme($tokens) {
+  @each $name, $value in $tokens {
+    --vigil-#{$name}: #{$value};
   }
+}
+
+:root {
+  @include vigil-theme($light);
+  color-scheme: light;
+
   @each $name, $value in $spacing {
     --vigil-space-#{$name}: #{$value};
   }
@@ -69,12 +164,24 @@ $radii: (
     --vigil-radius-#{$name}: #{$value};
   }
 
-  --vigil-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --vigil-shadow-sm: 0 1px 2px rgba(17, 28, 46, 0.06);
-  --vigil-shadow-md: 0 6px 20px rgba(17, 28, 46, 0.08);
-  --vigil-header-height: 56px;
-  --vigil-sidebar-width: 220px;
-  --vigil-content-max: 1440px;
+  // 兼容历史拼写
+  --vigil-font-size-sm: var(--vigil-font-sm);
+
+  --vigil-font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'HarmonyOS Sans SC', 'MiSans', 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei',
+    sans-serif;
+  --vigil-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  --vigil-dot-size: 24px;
+  --vigil-header-height: 60px;
+  --vigil-sidebar-width: 248px;
+  --vigil-content-max: 1360px;
   --vigil-transition: 160ms ease;
+  --vigil-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+html.dark {
+  @include vigil-theme($dark);
+  color-scheme: dark;
 }

@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   EmptyState,
   GuardEditor,
+  LiveBadge,
   LoadingBlock,
+  RefreshFab,
   StatusTag,
   TimeText,
   formatDuration,
   formatLatency,
   getErrorMessage,
+  usePolling,
   type ClientDetail,
   type GuardDefinition,
   type Incident,
@@ -135,11 +138,15 @@ async function clearGuardConfig() {
 }
 
 watch(clientId, load)
-onMounted(load)
+
+const poll = usePolling(load, {
+  interval: 15000,
+  isError: () => Boolean(error.value),
+})
 </script>
 
 <template>
-  <div class="page">
+  <div class="page pb-fab">
     <div class="page-head">
       <div>
         <router-link class="back-link" to="/clients">← 返回客户端列表</router-link>
@@ -149,7 +156,7 @@ onMounted(load)
         </h2>
         <p class="page-sub mono">{{ clientId }}</p>
       </div>
-      <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
     </div>
 
     <el-alert
@@ -160,7 +167,7 @@ onMounted(load)
       :closable="false"
       :title="error"
     >
-      <el-button size="small" text type="primary" @click="load">重试</el-button>
+      <el-button size="small" text type="primary" @click="poll.retry">重试</el-button>
     </el-alert>
 
     <LoadingBlock v-if="loading && !detail" min-height="240px" text="正在加载客户端详情…" />
@@ -171,7 +178,7 @@ onMounted(load)
       description="客户端可能已被删除，或接口暂无返回。"
     >
       <template #action>
-        <el-button size="small" @click="load">重新加载</el-button>
+        <el-button size="small" @click="poll.retry">重新加载</el-button>
       </template>
     </EmptyState>
 
@@ -483,6 +490,13 @@ onMounted(load)
       title="配置下发守护项"
       hint="保存后写入服务端并通过 /api/v1/config 下发；客户端本地配置将变为只读。"
       @save="handleGuardSave"
+    />
+
+    <RefreshFab
+      :loading="poll.refreshing"
+      :paused="poll.paused"
+      :error="Boolean(error)"
+      @refresh="poll.refresh"
     />
   </div>
 </template>

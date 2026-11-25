@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AppShell } from '@vigil/shared'
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import { AppShell, faRightFromBracket } from '@vigil/shared'
 import ClientNav from '@/components/ClientNav.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -34,7 +35,10 @@ function logout() {
     </template>
 
     <template #actions>
-      <button class="logout-btn" type="button" @click="logout">退出</button>
+      <button class="logout-btn" type="button" aria-label="退出登录" @click="logout">
+        <FontAwesomeIcon :icon="faRightFromBracket" fixed-width />
+        <span>退出</span>
+      </button>
     </template>
 
     <router-view />
@@ -53,13 +57,14 @@ function logout() {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--vigil-radius-sm);
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  color: #fff;
+  background: var(--vigil-gradient-brand);
+  color: var(--vigil-color-on-primary);
   font-size: var(--vigil-font-md);
   font-weight: 700;
+  box-shadow: var(--vigil-shadow-glow);
 }
 
 .brand-text {
@@ -70,27 +75,40 @@ function logout() {
   strong {
     font-size: var(--vigil-font-md);
     letter-spacing: 0.06em;
+    color: var(--vigil-color-text);
   }
 
   small {
-    font-size: 11px;
-    color: rgba(199, 210, 223, 0.72);
+    font-size: var(--vigil-font-xxs);
+    color: var(--vigil-color-text-muted);
   }
 }
 
 .logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 4px 12px;
   border: 1px solid var(--vigil-color-border);
   border-radius: var(--vigil-radius-sm);
   background: var(--vigil-color-surface);
   color: var(--vigil-color-text-secondary);
-  padding: 4px 12px;
   font-size: var(--vigil-font-xs);
   cursor: pointer;
-  transition: background var(--vigil-transition), color var(--vigil-transition);
+  transition: background var(--vigil-transition), color var(--vigil-transition),
+    border-color var(--vigil-transition);
 
   &:hover {
-    color: var(--vigil-color-text);
+    color: var(--vigil-color-primary);
+    border-color: var(--vigil-color-primary);
     background: var(--vigil-color-surface-alt);
+  }
+}
+
+@media (max-width: 480px) {
+  .logout-btn span {
+    display: none;
   }
 }
 

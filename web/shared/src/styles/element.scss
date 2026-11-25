@@ -1,0 +1,280 @@
+// Element Plus 主题映射：把 --vigil-* 语义令牌接入 --el-*
+// 必须在 element-plus 默认样式与 dark/css-vars.css 之后加载
+@use 'sass:color';
+
+$light-primary: #2563eb;
+$light-success: #0f7b57;
+$light-warning: #a65a00;
+$light-danger: #c0264a;
+$light-info: #0e7490;
+
+$dark-primary: #2563eb;
+$dark-success: #3ddc97;
+$dark-warning: #f6c177;
+$dark-danger: #ff7a90;
+$dark-info: #67e8f9;
+
+@mixin el-palette($mix-base, $primary, $success, $warning, $danger, $info) {
+  --el-color-primary: var(--vigil-color-primary-solid);
+  --el-color-primary-light-3: #{color.mix($mix-base, $primary, 30%)};
+  --el-color-primary-light-5: #{color.mix($mix-base, $primary, 50%)};
+  --el-color-primary-light-7: #{color.mix($mix-base, $primary, 70%)};
+  --el-color-primary-light-8: #{color.mix($mix-base, $primary, 80%)};
+  --el-color-primary-light-9: #{color.mix($mix-base, $primary, 90%)};
+  --el-color-primary-dark-2: #{color.mix(#000000, $primary, 20%)};
+
+  --el-color-success: var(--vigil-color-ok);
+  --el-color-success-light-3: #{color.mix($mix-base, $success, 30%)};
+  --el-color-success-light-5: #{color.mix($mix-base, $success, 50%)};
+  --el-color-success-light-7: #{color.mix($mix-base, $success, 70%)};
+  --el-color-success-light-8: #{color.mix($mix-base, $success, 80%)};
+  --el-color-success-light-9: #{color.mix($mix-base, $success, 90%)};
+  --el-color-success-dark-2: #{color.mix(#000000, $success, 20%)};
+
+  --el-color-warning: var(--vigil-color-warn);
+  --el-color-warning-light-3: #{color.mix($mix-base, $warning, 30%)};
+  --el-color-warning-light-5: #{color.mix($mix-base, $warning, 50%)};
+  --el-color-warning-light-7: #{color.mix($mix-base, $warning, 70%)};
+  --el-color-warning-light-8: #{color.mix($mix-base, $warning, 80%)};
+  --el-color-warning-light-9: #{color.mix($mix-base, $warning, 90%)};
+  --el-color-warning-dark-2: #{color.mix(#000000, $warning, 20%)};
+
+  --el-color-danger: var(--vigil-color-critical);
+  --el-color-danger-light-3: #{color.mix($mix-base, $danger, 30%)};
+  --el-color-danger-light-5: #{color.mix($mix-base, $danger, 50%)};
+  --el-color-danger-light-7: #{color.mix($mix-base, $danger, 70%)};
+  --el-color-danger-light-8: #{color.mix($mix-base, $danger, 80%)};
+  --el-color-danger-light-9: #{color.mix($mix-base, $danger, 90%)};
+  --el-color-danger-dark-2: #{color.mix(#000000, $danger, 20%)};
+
+  --el-color-error: var(--vigil-color-critical);
+  --el-color-error-light-3: #{color.mix($mix-base, $danger, 30%)};
+  --el-color-error-light-5: #{color.mix($mix-base, $danger, 50%)};
+  --el-color-error-light-7: #{color.mix($mix-base, $danger, 70%)};
+  --el-color-error-light-8: #{color.mix($mix-base, $danger, 80%)};
+  --el-color-error-light-9: #{color.mix($mix-base, $danger, 90%)};
+  --el-color-error-dark-2: #{color.mix(#000000, $danger, 20%)};
+
+  --el-color-info: var(--vigil-color-info);
+  --el-color-info-light-3: #{color.mix($mix-base, $info, 30%)};
+  --el-color-info-light-5: #{color.mix($mix-base, $info, 50%)};
+  --el-color-info-light-7: #{color.mix($mix-base, $info, 70%)};
+  --el-color-info-light-8: #{color.mix($mix-base, $info, 80%)};
+  --el-color-info-light-9: #{color.mix($mix-base, $info, 90%)};
+  --el-color-info-dark-2: #{color.mix(#000000, $info, 20%)};
+}
+
+:root {
+  @include el-palette(#ffffff, $light-primary, $light-success, $light-warning, $light-danger, $light-info);
+
+  --el-bg-color: var(--vigil-color-surface);
+  --el-bg-color-page: var(--vigil-color-bg);
+  --el-bg-color-overlay: var(--vigil-color-surface-raised);
+
+  --el-text-color-primary: var(--vigil-color-text);
+  --el-text-color-regular: var(--vigil-color-text-secondary);
+  --el-text-color-secondary: var(--vigil-color-text-muted);
+  --el-text-color-placeholder: var(--vigil-color-text-muted);
+  --el-text-color-disabled: var(--vigil-color-text-muted);
+
+  --el-border-color: var(--vigil-color-border);
+  --el-border-color-light: var(--vigil-color-border);
+  --el-border-color-lighter: var(--vigil-color-border);
+  --el-border-color-extra-light: var(--vigil-color-border);
+  --el-border-color-dark: var(--vigil-color-border-strong);
+  --el-border-color-darker: var(--vigil-color-border-strong);
+
+  --el-fill-color: var(--vigil-color-surface-alt);
+  --el-fill-color-light: var(--vigil-color-surface-alt);
+  --el-fill-color-lighter: var(--vigil-color-surface-alt);
+  --el-fill-color-extra-light: var(--vigil-color-surface-alt);
+  --el-fill-color-dark: var(--vigil-color-surface-alt);
+  --el-fill-color-darker: var(--vigil-color-surface-alt);
+  --el-fill-color-blank: var(--vigil-color-surface);
+
+  --el-mask-color: var(--vigil-color-overlay);
+  --el-mask-color-extra-light: var(--vigil-color-overlay);
+
+  --el-box-shadow: var(--vigil-shadow-md);
+  --el-box-shadow-light: var(--vigil-shadow-sm);
+  --el-box-shadow-lighter: var(--vigil-shadow-sm);
+  --el-box-shadow-dark: var(--vigil-shadow-lg);
+
+  --el-border-radius-base: var(--vigil-radius-sm);
+  --el-border-radius-small: var(--vigil-radius-sm);
+  --el-border-radius-round: var(--vigil-radius-pill);
+  --el-border-radius-circle: 50%;
+
+  --el-font-family: var(--vigil-font-family);
+  --el-font-size-base: var(--vigil-font-base);
+  --el-font-size-small: var(--vigil-font-sm);
+  --el-font-size-extra-small: var(--vigil-font-xs);
+
+  --el-component-size: 36px;
+  --el-component-size-small: 30px;
+  --el-component-size-large: 42px;
+
+  --el-disabled-bg-color: var(--vigil-color-surface-alt);
+  --el-disabled-text-color: var(--vigil-color-text-muted);
+  --el-disabled-border-color: var(--vigil-color-border);
+
+  --el-table-header-bg-color: var(--vigil-color-surface-alt);
+  --el-table-header-text-color: var(--vigil-color-text-secondary);
+  --el-table-text-color: var(--vigil-color-text);
+  --el-table-border-color: var(--vigil-color-border);
+  --el-table-tr-bg-color: var(--vigil-color-surface);
+  --el-table-row-hover-bg-color: var(--vigil-color-surface-alt);
+  --el-table-expanded-cell-bg-color: var(--vigil-color-surface);
+}
+
+html.dark {
+  @include el-palette(#0b0912, $dark-primary, $dark-success, $dark-warning, $dark-danger, $dark-info);
+
+  --el-color-white: #ffffff;
+  --el-color-black: #000000;
+
+  --el-bg-color: var(--vigil-color-surface);
+  --el-bg-color-page: var(--vigil-color-bg);
+  --el-bg-color-overlay: var(--vigil-color-surface-raised);
+
+  --el-text-color-primary: var(--vigil-color-text);
+  --el-text-color-regular: var(--vigil-color-text-secondary);
+  --el-text-color-secondary: var(--vigil-color-text-muted);
+  --el-text-color-placeholder: var(--vigil-color-text-muted);
+  --el-text-color-disabled: var(--vigil-color-text-muted);
+
+  --el-border-color: var(--vigil-color-border);
+  --el-border-color-light: var(--vigil-color-border);
+  --el-border-color-lighter: var(--vigil-color-border);
+  --el-border-color-extra-light: var(--vigil-color-border);
+  --el-border-color-dark: var(--vigil-color-border-strong);
+  --el-border-color-darker: var(--vigil-color-border-strong);
+
+  --el-fill-color: var(--vigil-color-surface-alt);
+  --el-fill-color-light: var(--vigil-color-surface-alt);
+  --el-fill-color-lighter: var(--vigil-color-surface-alt);
+  --el-fill-color-extra-light: var(--vigil-color-surface-alt);
+  --el-fill-color-dark: var(--vigil-color-surface-alt);
+  --el-fill-color-darker: var(--vigil-color-surface-alt);
+  --el-fill-color-blank: var(--vigil-color-surface);
+
+  --el-mask-color: var(--vigil-color-overlay);
+  --el-mask-color-extra-light: var(--vigil-color-overlay);
+
+  --el-box-shadow: var(--vigil-shadow-md);
+  --el-box-shadow-light: var(--vigil-shadow-sm);
+  --el-box-shadow-lighter: var(--vigil-shadow-sm);
+  --el-box-shadow-dark: var(--vigil-shadow-lg);
+
+  --el-disabled-bg-color: var(--vigil-color-surface-alt);
+  --el-disabled-text-color: var(--vigil-color-text-muted);
+  --el-disabled-border-color: var(--vigil-color-border);
+
+  --el-table-header-bg-color: var(--vigil-color-surface-alt);
+  --el-table-header-text-color: var(--vigil-color-text-secondary);
+  --el-table-text-color: var(--vigil-color-text);
+  --el-table-border-color: var(--vigil-color-border);
+  --el-table-tr-bg-color: var(--vigil-color-surface);
+  --el-table-row-hover-bg-color: var(--vigil-color-surface-alt);
+  --el-table-expanded-cell-bg-color: var(--vigil-color-surface);
+}
+
+// ---------- 组件细节 ----------
+.el-button {
+  font-weight: 500;
+}
+
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  background-color: var(--vigil-color-primary-solid);
+  background-image: var(--vigil-gradient-brand);
+  border-color: transparent;
+  color: var(--vigil-color-on-primary);
+}
+
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link):hover,
+.el-button--primary:not(.is-plain):not(.is-text):not(.is-link):focus-visible {
+  background-color: var(--vigil-color-primary-solid);
+  background-image: var(--vigil-gradient-brand);
+  border-color: transparent;
+  filter: brightness(1.06);
+  box-shadow: var(--vigil-shadow-glow);
+}
+
+.el-button.is-disabled,
+.el-button.is-disabled:hover {
+  background-image: none;
+  opacity: 0.45;
+}
+
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  background-color: var(--vigil-color-surface-alt);
+  box-shadow: 0 0 0 1px var(--vigil-color-border-strong) inset;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--vigil-color-primary-solid) inset,
+    0 0 0 3px var(--vigil-color-focus);
+}
+
+.el-table {
+  font-size: var(--vigil-font-sm);
+  --el-table-header-bg-color: var(--vigil-color-surface-alt);
+}
+
+.el-table th.el-table__cell {
+  background: var(--vigil-color-surface-alt);
+  color: var(--vigil-color-text-secondary);
+  font-weight: 600;
+}
+
+.el-table .el-table__cell {
+  padding: 10px 0;
+}
+
+.el-card {
+  --el-card-bg-color: var(--vigil-color-surface);
+  --el-card-border-color: var(--vigil-color-border);
+  border-radius: var(--vigil-radius-md);
+}
+
+.el-dialog {
+  --el-dialog-bg-color: var(--vigil-color-surface-raised);
+  border-radius: var(--vigil-radius-lg);
+  border: 1px solid var(--vigil-color-border);
+}
+
+.el-drawer {
+  --el-drawer-bg-color: var(--vigil-color-surface);
+}
+
+.el-popper.is-light,
+.el-dropdown__popper,
+.el-select__popper {
+  background: var(--vigil-color-surface-raised) !important;
+  border: 1px solid var(--vigil-color-border) !important;
+  border-radius: var(--vigil-radius-sm);
+  box-shadow: var(--vigil-shadow-md) !important;
+}
+
+.el-alert {
+  border-radius: var(--vigil-radius-sm);
+}
+
+.el-tag {
+  border-radius: var(--vigil-radius-pill);
+}
+
+.el-pagination {
+  --el-pagination-bg-color: transparent;
+  --el-pagination-button-bg-color: transparent;
+  font-size: var(--vigil-font-xs);
+}
+
+.el-pagination.is-background .el-pager li.is-active {
+  background: var(--vigil-color-primary-weak);
+  color: var(--vigil-color-primary);
+}

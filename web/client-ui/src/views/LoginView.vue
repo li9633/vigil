@@ -66,6 +66,7 @@ async function submit() {
         <el-form-item label="管理员令牌" prop="token">
           <el-input
             v-model="form.token"
+            size="large"
             type="password"
             show-password
             autocomplete="current-password"
@@ -90,23 +91,21 @@ async function submit() {
   justify-content: center;
   min-height: 100vh;
   padding: var(--vigil-space-4);
-  background:
-    radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.18), transparent 55%),
-    var(--vigil-color-bg);
+  background: var(--vigil-glow-primary), var(--vigil-color-bg);
 }
 
 .login-card {
   width: 100%;
   max-width: 360px;
-  padding: var(--vigil-space-5);
+  padding: var(--vigil-space-7);
   background: var(--vigil-color-surface);
   border: 1px solid var(--vigil-color-border);
   border-radius: var(--vigil-radius-lg);
-  box-shadow: var(--vigil-shadow-md);
+  box-shadow: var(--vigil-shadow-lg);
 
   h1 {
     margin: var(--vigil-space-4) 0 var(--vigil-space-1);
-    font-size: var(--vigil-font-md);
+    font-size: var(--vigil-font-lg);
   }
 }
 
@@ -123,9 +122,10 @@ async function submit() {
   width: 34px;
   height: 34px;
   border-radius: var(--vigil-radius-sm);
-  background: linear-gradient(135deg, #2563eb, #38bdf8);
-  color: #fff;
+  background: var(--vigil-gradient-brand);
+  color: var(--vigil-color-on-primary);
   font-weight: 700;
+  box-shadow: var(--vigil-shadow-glow);
 }
 
 .brand-text {
@@ -139,7 +139,7 @@ async function submit() {
   }
 
   small {
-    font-size: 11px;
+    font-size: var(--vigil-font-xxs);
     color: var(--vigil-color-text-muted);
   }
 }
@@ -161,7 +161,7 @@ async function submit() {
 
 .foot {
   margin: var(--vigil-space-4) 0 0;
-  font-size: 11px;
+  font-size: var(--vigil-font-xxs);
   color: var(--vigil-color-text-muted);
   line-height: 1.5;
 }

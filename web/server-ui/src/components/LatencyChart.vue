@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
-import { formatTime, toDate, type HeartbeatModule, type HeartbeatPoint } from '@vigil/shared'
+import {
+  formatTime,
+  getChartTheme,
+  toDate,
+  useTheme,
+  type HeartbeatModule,
+  type HeartbeatPoint,
+} from '@vigil/shared'
 
 const props = defineProps<{
   points: HeartbeatPoint[]
@@ -12,9 +19,10 @@ const container = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 let observer: ResizeObserver | null = null
 
-const PALETTE = ['#2563eb', '#16a34a', '#d97706', '#7c3aed', '#0891b2']
+const { resolved } = useTheme()
 
 function buildOption(): echarts.EChartsOption {
+  const theme = getChartTheme()
   const sorted = [...props.points]
     .filter((point) => toDate(point.ts))
     .sort((a, b) => (toDate(a.ts)?.getTime() ?? 0) - (toDate(b.ts)?.getTime() ?? 0))
@@ -29,7 +37,7 @@ function buildOption(): echarts.EChartsOption {
   })
 
   const latencySeries = props.modules.slice(0, 4).map((module, index) => {
-    const color = PALETTE[(index + 1) % PALETTE.length]
+    const color = theme.series[(index + 1) % theme.series.length]
     return {
       name: module.name || module.id,
       type: 'line' as const,
@@ -46,37 +54,43 @@ function buildOption(): echarts.EChartsOption {
   return {
     animation: false,
     grid: { left: 52, right: 56, top: 44, bottom: 30 },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'line' } },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'line', lineStyle: { color: theme.grid } },
+      backgroundColor: theme.surface,
+      borderColor: theme.border,
+      textStyle: { color: theme.text, fontSize: 12 },
+    },
     legend: {
       top: 4,
       type: 'scroll',
       itemWidth: 14,
       itemHeight: 8,
-      textStyle: { fontSize: 11 },
+      textStyle: { fontSize: 11, color: theme.text },
     },
     xAxis: {
       type: 'category',
       boundaryGap: false,
       data: categories,
-      axisLabel: { fontSize: 10, color: '#8a97a6' },
-      axisLine: { lineStyle: { color: '#e4e7ed' } },
+      axisLabel: { fontSize: 10, color: theme.axis },
+      axisLine: { lineStyle: { color: theme.grid } },
       axisTick: { show: false },
     },
     yAxis: [
       {
         type: 'value',
         name: '心跳间隔(s)',
-        nameTextStyle: { fontSize: 10, color: '#8a97a6' },
+        nameTextStyle: { fontSize: 10, color: theme.axis },
         min: 0,
-        axisLabel: { fontSize: 10, color: '#8a97a6' },
-        splitLine: { lineStyle: { color: '#f0f2f5' } },
+        axisLabel: { fontSize: 10, color: theme.axis },
+        splitLine: { lineStyle: { color: theme.grid, type: 'dashed' } },
       },
       {
         type: 'value',
         name: '时延(ms)',
-        nameTextStyle: { fontSize: 10, color: '#8a97a6' },
+        nameTextStyle: { fontSize: 10, color: theme.axis },
         min: 0,
-        axisLabel: { fontSize: 10, color: '#8a97a6' },
+        axisLabel: { fontSize: 10, color: theme.axis },
         splitLine: { show: false },
       },
     ],
@@ -88,9 +102,9 @@ function buildOption(): echarts.EChartsOption {
         step: 'end',
         showSymbol: false,
         connectNulls: false,
-        lineStyle: { width: 2, color: '#2563eb' },
-        itemStyle: { color: '#2563eb' },
-        areaStyle: { color: 'rgba(37, 99, 235, 0.07)' },
+        lineStyle: { width: 2, color: theme.series[0] },
+        itemStyle: { color: theme.series[0] },
+        areaStyle: { color: theme.series[0], opacity: 0.1 },
         data: gaps,
       },
       ...latencySeries,
@@ -116,6 +130,9 @@ watch(
   () => render(),
   { deep: true },
 )
+
+// 主题切换后重绘：坐标轴、网格、tooltip 与序列色全部更新
+watch(resolved, () => render())
 
 onBeforeUnmount(() => {
   observer?.disconnect()

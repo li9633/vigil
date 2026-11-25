@@ -1,21 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   EmptyState,
   GuardEditor,
+  LiveBadge,
   LoadingBlock,
+  RefreshFab,
   StatusTag,
   formatLatency,
   formatRelative,
   getErrorMessage,
+  usePolling,
   type GuardCheckResult,
   type GuardDefinition,
   type GuardSnapshot,
 } from '@vigil/shared'
 import { clientApi } from '@/api/client'
-
-const POLL_MS = 10000
 
 const definitions = ref<GuardDefinition[]>([])
 const snapshots = ref<GuardSnapshot[]>([])
@@ -31,8 +32,6 @@ const editorReadonly = ref(false)
 const editorSelected = ref('')
 const editorTitle = ref('编辑守护项')
 const editorHint = ref('')
-
-let timer: number | undefined
 
 interface GuardRow {
   def: GuardDefinition
@@ -124,20 +123,14 @@ async function handleSave(payload: GuardDefinition[]) {
   }
 }
 
-onMounted(() => {
-  load()
-  timer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') load()
-  }, POLL_MS)
-})
-
-onBeforeUnmount(() => {
-  if (timer !== undefined) window.clearInterval(timer)
+const poll = usePolling(load, {
+  interval: 10000,
+  isError: () => Boolean(error.value),
 })
 </script>
 
 <template>
-  <div class="page">
+  <div class="page pb-fab">
     <div class="page-head">
       <div>
         <h2 class="page-title">守护项</h2>
@@ -148,7 +141,7 @@ onBeforeUnmount(() => {
         </p>
       </div>
       <div class="head-actions">
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+        <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
         <el-button
           v-if="editable"
           size="small"
@@ -174,7 +167,7 @@ onBeforeUnmount(() => {
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
       <div class="alert-row">
         <span>{{ error }}</span>
-        <el-button size="small" text type="primary" @click="load">重试</el-button>
+        <el-button size="small" text type="primary" @click="poll.retry">重试</el-button>
       </div>
     </el-alert>
 
@@ -272,6 +265,13 @@ onBeforeUnmount(() => {
       :title="editorTitle"
       :hint="editorHint"
       @save="handleSave"
+    />
+
+    <RefreshFab
+      :loading="poll.refreshing"
+      :paused="poll.paused"
+      :error="Boolean(error)"
+      @refresh="poll.refresh"
     />
   </div>
 </template>

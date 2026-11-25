@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   EmptyState,
+  LiveBadge,
+  RefreshFab,
   StatusTag,
   TimeText,
   getErrorMessage,
   unwrapList,
+  usePolling,
   type Incident,
 } from '@vigil/shared'
 import { adminApi } from '@/api/admin'
@@ -101,19 +104,20 @@ async function acknowledge(incident: Incident) {
   }
 }
 
-onMounted(load)
+const poll = usePolling(load, {
+  interval: 20000,
+  isError: () => Boolean(error.value),
+})
 </script>
 
 <template>
-  <div class="page">
+  <div class="page pb-fab">
     <div class="page-head">
       <div>
         <h2 class="page-title">告警中心</h2>
         <p class="page-sub">按客户端 / 类别 / 时间聚合，支持确认操作{{ activeFilterCount ? ` · 已启用 ${activeFilterCount} 个筛选` : '' }}</p>
       </div>
-      <div class="toolbar">
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
-      </div>
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
     </div>
 
     <div class="panel">
@@ -146,7 +150,7 @@ onMounted(load)
       <el-alert v-if="error" class="table-error" type="error" show-icon :closable="false">
         <div class="error-actions">
           <span>{{ error }}</span>
-          <el-button size="small" text type="primary" @click="load">重试</el-button>
+          <el-button size="small" text type="primary" @click="poll.retry">重试</el-button>
         </div>
       </el-alert>
 
@@ -218,6 +222,13 @@ onMounted(load)
         </el-table>
       </div>
     </div>
+
+    <RefreshFab
+      :loading="poll.refreshing"
+      :paused="poll.paused"
+      :error="Boolean(error)"
+      @refresh="poll.refresh"
+    />
   </div>
 </template>
 

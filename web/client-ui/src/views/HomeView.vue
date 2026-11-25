@@ -1,27 +1,24 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   EmptyState,
+  LiveBadge,
   LoadingBlock,
+  RefreshFab,
   StatusTag,
   TimeText,
   booleanStatus,
   formatDuration,
   formatLatency,
   getErrorMessage,
+  usePolling,
   type ClientStatusSnapshot,
 } from '@vigil/shared'
 import { clientApi } from '@/api/client'
 
-const POLL_MS = 5000
-
 const status = ref<ClientStatusSnapshot | null>(null)
 const loading = ref(false)
 const error = ref('')
-const lastUpdated = ref<Date | null>(null)
-
-let timer: number | undefined
-let seq = 0
 
 const modules = computed(() => status.value?.modules ?? [])
 const guards = computed(() => status.value?.guards ?? [])
@@ -50,56 +47,39 @@ const infoCells = computed(() => {
   ]
 })
 
-async function load(silent = false) {
-  const current = ++seq
-  if (!silent) loading.value = true
+async function load() {
+  if (loading.value) return
+  loading.value = true
+  error.value = ''
   try {
-    const data = await clientApi.status()
-    if (current !== seq) return
-    status.value = data
-    lastUpdated.value = new Date()
-    error.value = ''
+    status.value = await clientApi.status()
   } catch (err) {
-    if (current !== seq) return
     error.value = getErrorMessage(err, '状态加载失败')
   } finally {
-    if (current === seq && !silent) loading.value = false
+    loading.value = false
   }
 }
 
-function onVisibilityChange() {
-  if (document.visibilityState === 'visible') load(true)
-}
-
-onMounted(() => {
-  load()
-  timer = window.setInterval(() => {
-    if (document.visibilityState === 'visible') load(true)
-  }, POLL_MS)
-  document.addEventListener('visibilitychange', onVisibilityChange)
-})
-
-onBeforeUnmount(() => {
-  if (timer !== undefined) window.clearInterval(timer)
-  document.removeEventListener('visibilitychange', onVisibilityChange)
-  seq += 1
+const poll = usePolling(load, {
+  interval: 5000,
+  isError: () => Boolean(error.value),
 })
 </script>
 
 <template>
-  <div class="page">
+  <div class="page pb-fab">
     <div class="page-head">
       <div>
         <h2 class="page-title">连接状态</h2>
-        <p class="page-sub">每 5 秒自动刷新，写操作请在“动作”页执行</p>
+        <p class="page-sub">每 5 秒自动更新，写操作请在“动作”页执行</p>
       </div>
-      <el-button size="small" :loading="loading" @click="load()">刷新</el-button>
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
     </div>
 
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
       <div class="alert-row">
         <span>{{ error }}</span>
-        <el-button size="small" text type="primary" @click="load()">重试</el-button>
+        <el-button size="small" text type="primary" @click="poll.retry">重试</el-button>
       </div>
     </el-alert>
 
@@ -111,7 +91,7 @@ onBeforeUnmount(() => {
       description="请确认 agent 服务已启动后重试。"
     >
       <template #action>
-        <el-button size="small" @click="load()">重新加载</el-button>
+        <el-button size="small" @click="poll.retry">重新加载</el-button>
       </template>
     </EmptyState>
 
@@ -122,7 +102,7 @@ onBeforeUnmount(() => {
             <span class="state-caption">当前状态</span>
             <StatusTag :status="status.state" />
             <span class="state-hint muted">
-              更新于 <TimeText :value="status.generated_at || lastUpdated" /> · 运行
+              更新于 <TimeText :value="status.generated_at || poll.lastUpdated" /> · 运行
               {{ formatDuration(status.uptime) }}
             </span>
           </div>
@@ -214,6 +194,13 @@ onBeforeUnmount(() => {
         本地上报队列中还有 {{ spool.pending }} 条事件等待发送。
       </p>
     </template>
+
+    <RefreshFab
+      :loading="poll.refreshing"
+      :paused="poll.paused"
+      :error="Boolean(error)"
+      @refresh="poll.refresh"
+    />
   </div>
 </template>
 

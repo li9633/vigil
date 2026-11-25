@@ -1,24 +1,37 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { EmptyState, LoadingBlock, StatusTag, TimeText, formatPercent, getErrorMessage, type Overview } from '@vigil/shared'
+import { computed, ref } from 'vue'
+import {
+  EmptyState,
+  LiveBadge,
+  LoadingBlock,
+  RefreshFab,
+  StatCard,
+  StatusTag,
+  TimeText,
+  formatPercent,
+  getErrorMessage,
+  usePolling,
+  type Overview,
+} from '@vigil/shared'
 import { adminApi } from '@/api/admin'
 
 const overview = ref<Overview | null>(null)
 const loading = ref(false)
 const error = ref('')
 
-interface StatCard {
+interface StatItem {
   label: string
   value: string
   hint?: string
   tone?: 'ok' | 'warn' | 'critical'
+  accent?: boolean
 }
 
-const statCards = computed<StatCard[]>(() => {
+const statCards = computed<StatItem[]>(() => {
   const data = overview.value
   if (!data) return []
   const rate = data.notification_success_rate
-  const rateTone: StatCard['tone'] | undefined =
+  const rateTone: StatItem['tone'] | undefined =
     rate === null || rate === undefined
       ? undefined
       : (rate <= 1 ? rate * 100 : rate) >= 99
@@ -32,18 +45,21 @@ const statCards = computed<StatCard[]>(() => {
       label: '客户端总数',
       value: String(data.clients_total ?? 0),
       hint: `在线 ${data.clients_online ?? 0}`,
+      accent: true,
     },
     {
       label: '当前离线',
       value: String(data.clients_down ?? 0),
       tone: (data.clients_down ?? 0) > 0 ? 'critical' : 'ok',
       hint: 'SUSPECT / DOWN',
+      accent: true,
     },
     {
       label: '未闭环告警',
       value: String(data.open_incidents ?? 0),
       tone: (data.open_incidents ?? 0) > 0 ? 'critical' : 'ok',
       hint: '待处理 incident',
+      accent: true,
     },
     {
       label: '近 24h 告警',
@@ -55,6 +71,7 @@ const statCards = computed<StatCard[]>(() => {
       value: formatPercent(data.notification_success_rate),
       tone: rateTone,
       hint: '近 24 小时',
+      accent: true,
     },
   ]
 })
@@ -81,11 +98,14 @@ async function load() {
   }
 }
 
-onMounted(load)
+const poll = usePolling(load, {
+  interval: 15000,
+  isError: () => Boolean(error.value),
+})
 </script>
 
 <template>
-  <div class="page">
+  <div class="page pb-fab">
     <div class="page-head">
       <div>
         <h2 class="page-title">运行总览</h2>
@@ -96,13 +116,13 @@ onMounted(load)
           </template>
         </p>
       </div>
-      <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
     </div>
 
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
       <div class="error-actions">
         <span>{{ error }}</span>
-        <el-button size="small" :loading="loading" @click="load">重试</el-button>
+        <el-button size="small" :loading="poll.refreshing" @click="poll.retry">重试</el-button>
       </div>
     </el-alert>
 
@@ -114,17 +134,22 @@ onMounted(load)
       description="请确认服务端 API 可用后重试。"
     >
       <template #action>
-        <el-button size="small" @click="load">重新加载</el-button>
+        <el-button size="small" @click="poll.retry">重新加载</el-button>
       </template>
     </EmptyState>
 
     <template v-else-if="overview">
       <div class="stat-grid">
-        <div v-for="card in statCards" :key="card.label" class="stat-card" :class="card.tone ? `tone-${card.tone}` : ''">
-          <span class="stat-label">{{ card.label }}</span>
-          <strong class="stat-value">{{ card.value }}</strong>
-          <span class="stat-hint">{{ card.hint }}</span>
-        </div>
+        <StatCard
+          v-for="card in statCards"
+          :key="card.label"
+          :label="card.label"
+          :value="card.value"
+          :hint="card.hint"
+          :tone="card.tone"
+          :accent="card.accent"
+          :pulse="card.tone === 'critical'"
+        />
       </div>
 
       <div class="panel">
@@ -156,6 +181,13 @@ onMounted(load)
         </div>
       </div>
     </template>
+
+    <RefreshFab
+      :loading="poll.refreshing"
+      :paused="poll.paused"
+      :error="Boolean(error)"
+      @refresh="poll.refresh"
+    />
   </div>
 </template>
 

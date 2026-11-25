@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import {
   EmptyState,
+  LiveBadge,
   LoadingBlock,
+  RefreshFab,
   StatusTag,
   TimeText,
   formatLatency,
   getErrorMessage,
   unwrapList,
+  usePolling,
   type CheckItem,
 } from '@vigil/shared'
 import { clientApi } from '@/api/client'
@@ -45,11 +48,14 @@ async function load() {
   }
 }
 
-onMounted(load)
+const poll = usePolling(load, {
+  interval: 10000,
+  isError: () => Boolean(error.value),
+})
 </script>
 
 <template>
-  <div class="page">
+  <div class="page pb-fab">
     <div class="page-head">
       <div>
         <h2 class="page-title">检测项</h2>
@@ -57,13 +63,13 @@ onMounted(load)
           共 {{ checks.length }} 项 · 异常 <span :class="{ 'text-critical': abnormalCount > 0 }">{{ abnormalCount }}</span> 项
         </p>
       </div>
-      <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
     </div>
 
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
       <div class="alert-row">
         <span>{{ error }}</span>
-        <el-button size="small" text type="primary" @click="load">重试</el-button>
+        <el-button size="small" text type="primary" @click="poll.retry">重试</el-button>
       </div>
     </el-alert>
 
@@ -75,7 +81,7 @@ onMounted(load)
       description="分层检测模块尚未产生结果，或接口暂无返回。"
     >
       <template #action>
-        <el-button size="small" @click="load">重新加载</el-button>
+        <el-button size="small" @click="poll.retry">重新加载</el-button>
       </template>
     </EmptyState>
 
@@ -104,6 +110,13 @@ onMounted(load)
         </ul>
       </div>
     </div>
+
+    <RefreshFab
+      :loading="poll.refreshing"
+      :paused="poll.paused"
+      :error="Boolean(error)"
+      @refresh="poll.refresh"
+    />
   </div>
 </template>
 

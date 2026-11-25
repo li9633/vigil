@@ -3,10 +3,13 @@ import { createPinia } from 'pinia'
 import ElementPlus from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import 'element-plus/dist/index.css'
-import { configureApi } from '@vigil/shared'
+import 'element-plus/theme-chalk/dark/css-vars.css'
+import { configureApi, initTheme } from '@vigil/shared'
 import App from './App.vue'
 import router from './router'
 import './styles/app.scss'
+
+initTheme()
 
 configureApi({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '',

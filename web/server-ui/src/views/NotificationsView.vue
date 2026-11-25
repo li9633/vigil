@@ -267,7 +267,6 @@ onMounted(load)
             controls-position="right"
           />
         </span>
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
         <el-button
           size="small"
           type="primary"
@@ -408,7 +407,6 @@ onMounted(load)
     <div class="panel">
       <div class="panel-head">
         <span class="panel-title">最近通知记录</span>
-        <el-button size="small" :loading="recordsLoading" @click="loadRecords">刷新</el-button>
       </div>
 
       <el-alert

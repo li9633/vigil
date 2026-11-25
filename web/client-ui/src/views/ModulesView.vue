@@ -134,7 +134,6 @@ onMounted(load)
         </p>
       </div>
       <div class="head-actions">
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
         <el-button size="small" type="primary" @click="openImport">导入脚本</el-button>
       </div>
     </div>

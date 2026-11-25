@@ -603,7 +603,7 @@ function submit(): void {
   align-items: center;
   justify-content: center;
   padding: var(--vigil-space-4);
-  background: rgba(15, 23, 42, 0.55);
+  background: var(--vigil-color-overlay);
 }
 
 .guard-dialog {
@@ -613,7 +613,7 @@ function submit(): void {
   max-height: 90vh;
   background: var(--vigil-color-surface);
   border-radius: var(--vigil-radius-md);
-  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.35);
+  box-shadow: var(--vigil-shadow-lg);
   overflow: hidden;
 }
 
@@ -657,7 +657,7 @@ function submit(): void {
   padding: var(--vigil-space-3);
   border-right: 1px solid var(--vigil-color-border);
   overflow-y: auto;
-  background: var(--vigil-color-bg-subtle, #f8fafc);
+  background: var(--vigil-color-bg-subtle);
 }
 
 .guard-nav__item {
@@ -697,7 +697,7 @@ function submit(): void {
   border: 1px dashed var(--vigil-color-border);
   border-radius: var(--vigil-radius-sm);
   background: transparent;
-  color: var(--vigil-color-primary, #2563eb);
+  color: var(--vigil-color-primary);
   font-size: var(--vigil-font-xs);
   cursor: pointer;
 }
@@ -779,7 +779,7 @@ function submit(): void {
   font-family: inherit;
 
   &:disabled {
-    background: var(--vigil-color-bg-subtle, #f1f5f9);
+    background: var(--vigil-color-bg-subtle);
     color: var(--vigil-color-text-muted);
   }
 
@@ -851,7 +851,7 @@ function submit(): void {
 .text-btn {
   border: none;
   background: transparent;
-  color: var(--vigil-color-primary, #2563eb);
+  color: var(--vigil-color-primary);
   font-size: var(--vigil-font-xs);
   cursor: pointer;
 }
@@ -895,14 +895,14 @@ function submit(): void {
   cursor: pointer;
 
   &--primary {
-    border-color: var(--vigil-color-primary, #2563eb);
-    background: var(--vigil-color-primary, #2563eb);
-    color: #fff;
+    border-color: var(--vigil-color-primary-solid);
+    background: var(--vigil-color-primary-solid);
+    color: var(--vigil-color-on-primary);
   }
 }
 
 .mono {
-  font-family: var(--vigil-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-family: var(--vigil-font-mono);
 }
 
 .muted {

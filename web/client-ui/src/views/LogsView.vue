@@ -7,6 +7,7 @@ import {
   TimeText,
   getErrorMessage,
   unwrapList,
+  copyText,
   type LogEntry,
   type LogQuery,
 } from '@vigil/shared'
@@ -128,10 +129,9 @@ function exportLogs() {
 
 async function copy(value?: string) {
   if (!value) return
-  try {
-    await navigator.clipboard.writeText(value)
+  if (await copyText(value)) {
     ElMessage.success('已复制')
-  } catch {
+  } else {
     ElMessage.warning('复制失败，请手动选择')
   }
 }
@@ -158,7 +158,6 @@ onMounted(() => {
         <p class="page-sub">共 {{ logs.length }} 条 · 本机结构化日志，导出为 JSONL</p>
       </div>
       <div class="head-actions">
-        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
         <el-button size="small" type="primary" plain @click="exportLogs">导出</el-button>
       </div>
     </div>
@@ -439,7 +438,7 @@ onMounted(() => {
     margin: var(--vigil-space-2) 0 0;
     padding: var(--vigil-space-2);
     overflow: auto;
-    background: var(--vigil-color-surface-muted, rgba(127, 127, 127, 0.08));
+    background: var(--vigil-color-surface-muted);
     border-radius: var(--vigil-radius-sm);
     font-size: 12px;
     white-space: pre-wrap;
