@@ -167,6 +167,24 @@ def _iso_utc(epoch):
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _acked_seqs(batch, acked):
+    """把服务端 ack（event_id 字符串或 seq 整数）映射为本地 seq 列表。
+
+    服务端 /api/v1/events 返回 acked=event_id 列表；旧版本可能返回 seq。
+    无法识别的 ack 不确认，等待下轮重试。
+    """
+    if not isinstance(acked, list) or not acked:
+        return [item.get("seq") for item in batch]
+    by_id = {str(item.get("event_id")): item.get("seq") for item in batch}
+    seqs = []
+    for value in acked:
+        if isinstance(value, int) and not isinstance(value, bool):
+            seqs.append(value)
+        elif str(value) in by_id:
+            seqs.append(by_id[str(value)])
+    return seqs
+
+
 def _evidence_text(evidence):
     """把检测证据对象压成一行可读文本，前端表格按字符串直接展示。"""
     if not evidence:
@@ -524,9 +542,7 @@ class AgentApp:
                 return
             body = result.get("body") or {}
             acked = body.get("acked") or body.get("acked_seqs")
-            if not isinstance(acked, list):
-                acked = [event.get("seq") for event in batch]
-            self.spool.ack([item for item in acked if isinstance(item, int)])
+            self.spool.ack(_acked_seqs(batch, acked))
 
     def poll_config(self):
         result = self.transport.fetch_config(self._etag)
