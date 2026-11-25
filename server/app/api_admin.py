@@ -9,11 +9,12 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session, utcnow
+from app.logstore import collect_log_events, export_log_events, log_event, log_paths
 from app.models import (
     AuditLog,
     Client,
@@ -227,6 +228,12 @@ def login(
         constant_time_equals(payload.password, settings.admin_password)
     )
     if not valid:
+        log_event(
+            "warn",
+            "auth.login.fail",
+            "管理员登录失败",
+            username=payload.username,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
@@ -245,6 +252,7 @@ def login(
         )
     )
     db.commit()
+    log_event("info", "auth.login.success", "管理员登录成功", actor=payload.username)
     return {"ok": True, "actor": payload.username, "server_time": int(time.time())}
 
 
@@ -723,6 +731,15 @@ def update_client_guards(
         )
     )
     db.commit()
+    log_event(
+        "info",
+        "guard_config.update",
+        "守护项配置已更新",
+        client_id=client_id,
+        actor=actor,
+        count=len(configs),
+        removed=removed,
+    )
 
     rows = db.scalars(
         select(GuardConfig)
@@ -757,4 +774,76 @@ def clear_client_guards(
         )
     )
     db.commit()
+    log_event(
+        "info",
+        "guard_config.clear",
+        "守护项下发配置已清除",
+        client_id=client_id,
+        actor=actor,
+        removed=len(removed),
+    )
     return {"items": [], "managed": False}
+
+
+@router.get("/logs")
+def server_logs(
+    limit: int = Query(200, ge=1, le=1000),
+    level: str | None = None,
+    event: str | None = None,
+    client_id: str | None = None,
+    request_id: str | None = None,
+    instance: str | None = None,
+    since: float | None = None,
+    settings: Settings = Depends(settings_from_app),
+    _actor: str = Depends(require_admin),
+) -> list[dict[str, Any]]:
+    """服务端结构化日志（合并 api / worker 两个实例）。"""
+    if instance and instance not in ("api", "worker"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="instance 必须是 api 或 worker"
+        )
+    return collect_log_events(
+        log_paths(settings),
+        limit=limit,
+        level=level,
+        event=event,
+        client_id=client_id,
+        request_id=request_id,
+        instance=instance,
+        since=since,
+        backups=settings.log_backups,
+    )
+
+
+@router.get("/logs/export")
+def server_logs_export(
+    level: str | None = None,
+    event: str | None = None,
+    client_id: str | None = None,
+    request_id: str | None = None,
+    instance: str | None = None,
+    since: float | None = None,
+    settings: Settings = Depends(settings_from_app),
+    _actor: str = Depends(require_admin),
+) -> Response:
+    """导出服务端日志为 JSONL。"""
+    if instance and instance not in ("api", "worker"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="instance 必须是 api 或 worker"
+        )
+    data = export_log_events(
+        log_paths(settings),
+        level=level,
+        event=event,
+        client_id=client_id,
+        request_id=request_id,
+        instance=instance,
+        since=since,
+        backups=settings.log_backups,
+    )
+    filename = "vigil-server-logs-%s.jsonl" % time.strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content=data,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % filename},
+    )

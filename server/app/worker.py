@@ -8,6 +8,7 @@ import time
 from datetime import timedelta
 
 from app.db import init_db, init_engine, session_scope, utcnow
+from app.logstore import configure_logging, log_event
 from app.notifications import (
     load_config,
     pending_recovery_incidents,
@@ -38,7 +39,7 @@ def run_forever(settings: Settings) -> None:
                 purged = purge_expired_nonces(db, now, settings.nonce_ttl_seconds)
                 _dispatch_notifications(db, touched, now)
                 if touched:
-                    logger.info(
+                    logger.debug(
                         "扫描完成：更新 %d 个 incident，清理 %d 条过期 nonce",
                         len(touched),
                         purged,
@@ -60,33 +61,71 @@ def _dispatch_notifications(db, touched, now) -> None:
             else:
                 continue
             try:
-                send_incident(db, incident, kind, now, config)
+                records = send_incident(db, incident, kind, now, config)
+                for record in records:
+                    if record.status == "sent":
+                        log_event(
+                            "info",
+                            "notify.send",
+                            "通知已发送",
+                            incident_id=incident.id,
+                            client_id=incident.client_id,
+                            channel=record.channel,
+                            kind=record.kind,
+                        )
+                    elif record.status == "failed":
+                        log_event(
+                            "error",
+                            "notify.fail",
+                            "通知发送失败",
+                            incident_id=incident.id,
+                            client_id=incident.client_id,
+                            channel=record.channel,
+                            kind=record.kind,
+                            error=record.last_error,
+                        )
             except Exception:
                 logger.exception("通知发送失败：incident=%s kind=%s", incident.id, kind)
+                log_event(
+                    "error",
+                    "notify.fail",
+                    "通知分发异常",
+                    incident_id=incident.id,
+                    client_id=incident.client_id,
+                    kind=kind,
+                )
         for incident in pending_recovery_incidents(db, now - timedelta(hours=24)):
             try:
                 send_incident(db, incident, "recovery", now, config)
             except Exception:
                 logger.exception("恢复通知发送失败：incident=%s", incident.id)
+                log_event(
+                    "error",
+                    "notify.fail",
+                    "恢复通知发送异常",
+                    incident_id=incident.id,
+                    client_id=incident.client_id,
+                    kind="recovery",
+                )
         retry_failed(db, now, config)
     except Exception:
         logger.exception("通知分发失败")
+        log_event("error", "notify.fail", "通知分发失败")
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
     settings = get_settings()
+    configure_logging("worker", settings)
     init_engine(settings.database_url)
     init_db()
-    logger.info(
-        "worker 启动：interval=%ss suspect=%ss down=%ss beacon=%ss",
-        settings.worker_interval_seconds,
-        settings.suspect_seconds,
-        settings.down_seconds,
-        settings.beacon_seconds,
+    log_event(
+        "info",
+        "app.start",
+        "Vigil worker 启动",
+        interval_seconds=settings.worker_interval_seconds,
+        suspect_seconds=settings.suspect_seconds,
+        down_seconds=settings.down_seconds,
+        beacon_seconds=settings.beacon_seconds,
     )
     run_forever(settings)
 

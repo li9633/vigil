@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Client, Heartbeat, Incident
+from app.logstore import log_event
 from app.settings import Thresholds
 
 CATEGORY_AGENT_DOWN = "agent_down"
@@ -140,6 +141,7 @@ def record_silence(
 
     incident = get_open_incident(db, client_id)
     state = incident_state_for(evaluation)
+    previous = incident.state if incident is not None else None
     if incident is None:
         incident = Incident(
             client_id=client_id,
@@ -157,6 +159,17 @@ def record_silence(
         incident.state = state
         incident.summary = _summary_for(evaluation)
     db.flush()
+    if previous != state:
+        log_event(
+            "warn" if state == STATE_DOWN else "info",
+            "incident.open",
+            "客户端告警状态推进",
+            incident_id=incident.id,
+            client_id=client_id,
+            category=evaluation.category,
+            state=state,
+            previous=previous,
+        )
     return incident
 
 
@@ -187,6 +200,15 @@ def recover_incidents(
         incident.state = STATE_RECOVERED
         incident.recovered_at = now
         incident.summary = _append_summary(incident.summary, f"recovered: {note}")
+        log_event(
+            "info",
+            "incident.recover",
+            "客户端告警恢复",
+            incident_id=incident.id,
+            client_id=client_id,
+            category=incident.category,
+            state=STATE_RECOVERED,
+        )
         if evidence:
             incident.evidence_json = json.dumps(evidence, ensure_ascii=False)
     db.flush()
@@ -274,6 +296,7 @@ def scan_guards(db: Session, now: datetime) -> list[Incident]:
     - PENDING / RECOVERING：不新建告警，避免抖动噪音
     """
     touched: list[Incident] = []
+    created: list[Incident] = []
     clients = db.scalars(select(Client).where(Client.enabled.is_(True))).all()
     for client in clients:
         heartbeat = _latest_heartbeat(db, client.client_id)
@@ -323,6 +346,7 @@ def scan_guards(db: Session, now: datetime) -> list[Incident]:
                         evidence_json=evidence,
                     )
                     db.add(open_incident)
+                    created.append(open_incident)
                 else:
                     open_incident.state = STATE_DOWN
                     open_incident.guard_name = name
@@ -335,6 +359,29 @@ def scan_guards(db: Session, now: datetime) -> list[Incident]:
                 open_incident.summary = _append_summary(
                     open_incident.summary, f"recovered: 守护项 {name} 恢复"
                 )
+                log_event(
+                    "info",
+                    "incident.recover",
+                    "守护项告警恢复",
+                    incident_id=open_incident.id,
+                    client_id=client.client_id,
+                    guard_id=guard_id,
+                    guard_name=name,
+                    category=CATEGORY_GUARD_FAILED,
+                    state=STATE_RECOVERED,
+                )
                 touched.append(open_incident)
     db.flush()
+    for incident in created:
+        log_event(
+            "warn",
+            "incident.open",
+            "守护项告警触发",
+            incident_id=incident.id,
+            client_id=incident.client_id,
+            guard_id=incident.guard_id,
+            guard_name=incident.guard_name,
+            category=CATEGORY_GUARD_FAILED,
+            state=STATE_DOWN,
+        )
     return touched

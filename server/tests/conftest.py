@@ -28,6 +28,7 @@ def settings(tmp_path: Path) -> Settings:
         admin_username=ADMIN_USERNAME,
         admin_password=ADMIN_PASSWORD,
         session_secret="test-session-secret",
+        log_dir=str(tmp_path / "logs"),
     )
 
 

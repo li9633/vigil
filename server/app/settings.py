@@ -63,6 +63,11 @@ class Settings:
     session_max_age: int = field(default=12 * 3600)
     session_https_only: bool = False
 
+    log_dir: str = "/var/lib/vigil/logs"
+    log_max_bytes: int = 10 * 1024 * 1024
+    log_backups: int = 5
+    log_compress: bool = True
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -84,6 +89,10 @@ class Settings:
             ),
             flapping_threshold=_env_int("VIGIL_FLAPPING_THRESHOLD", cls.flapping_threshold),
             session_https_only=_env_bool("VIGIL_SESSION_HTTPS_ONLY", cls.session_https_only),
+            log_dir=_env_str("VIGIL_LOG_DIR", cls.log_dir),
+            log_max_bytes=_env_int("VIGIL_LOG_MAX_BYTES", cls.log_max_bytes),
+            log_backups=_env_int("VIGIL_LOG_BACKUPS", cls.log_backups),
+            log_compress=_env_bool("VIGIL_LOG_COMPRESS", cls.log_compress),
         )
 
     @property

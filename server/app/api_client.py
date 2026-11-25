@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_session, utcnow
+from app.logstore import log_event
 from app.models import Beacon, Client, ClientEvent, GuardConfig, Heartbeat
 from app.schemas import (
     BeaconRequest,
@@ -165,6 +166,15 @@ def register(
     )
     db.add(client)
     db.commit()
+    log_event(
+        "info",
+        "client.register",
+        "客户端注册成功",
+        client_id=client.client_id,
+        name=client.name,
+        model=client.model,
+        agent_version=payload.agent_version,
+    )
 
     return RegisterResponse(
         client_id=client.client_id,
