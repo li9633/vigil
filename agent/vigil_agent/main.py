@@ -735,6 +735,25 @@ class AgentApp:
     def _emit_guard_events(self, previous, current):
         for guard_id, snapshot in current.items():
             old = previous.get(guard_id) or {}
+            if not old:
+                # agent 重启或新增 Guard 后的第一轮没有上一轮快照，只记录初始状态
+                log_event(
+                    "info",
+                    "guard.state",
+                    "守护项初始状态：%s" % snapshot["status"],
+                    guard={
+                        "id": guard_id,
+                        "name": snapshot["name"],
+                        "template": snapshot.get("template", ""),
+                    },
+                    **{
+                        "from": "",
+                        "to": snapshot["status"],
+                        "check_status": snapshot["check_status"],
+                        "failure_count": snapshot.get("failure_count", 0),
+                    },
+                )
+                continue
             if old.get("status") == snapshot["status"]:
                 continue
             self._record_event(
