@@ -324,14 +324,15 @@ def scan_guards(db: Session, now: datetime) -> list[Incident]:
             ).first()
 
             if status in GUARD_ALERT_STATES:
-                evidence = json.dumps(
-                    {
-                        "guard": guard,
-                        "heartbeat_seq": heartbeat.seq,
-                        "heartbeat_at": heartbeat.received_at.isoformat(),
-                    },
-                    ensure_ascii=False,
-                )
+                recovery_id = str(guard.get("last_recovery_id") or "")
+                evidence_payload = {
+                    "guard": guard,
+                    "heartbeat_seq": heartbeat.seq,
+                    "heartbeat_at": heartbeat.received_at.isoformat(),
+                }
+                if recovery_id:
+                    evidence_payload["recovery_id"] = recovery_id
+                evidence = json.dumps(evidence_payload, ensure_ascii=False)
                 summary = _guard_summary(guard, status)
                 if open_incident is None:
                     open_incident = Incident(

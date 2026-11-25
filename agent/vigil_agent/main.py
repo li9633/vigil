@@ -877,6 +877,7 @@ class AgentApp:
                 "skipped": bool(outcome.get("skipped")),
                 "status": state.get("status", ""),
                 "attempts": len(outcome.get("attempts") or []),
+                "recovery_id": outcome.get("recovery_id", ""),
             },
         )
         self._sync_guard_state(guard_id)
@@ -982,6 +983,7 @@ class AgentApp:
                 "check_status": snapshot.get("check_status", ""),
                 "failure_count": snapshot.get("failure_count", 0),
                 "checks": snapshot.get("checks", {}),
+                "last_recovery_id": snapshot.get("last_recovery_id", ""),
             }
         return payload
 
@@ -1321,7 +1323,15 @@ class AgentApp:
             "payload": payload,
         }
 
-    def api_logs(self, limit=200, level=None, event=None, guard_id=None, since=None):
+    def api_logs(
+        self,
+        limit=200,
+        level=None,
+        event=None,
+        guard_id=None,
+        recovery_id=None,
+        since=None,
+    ):
         limit = max(1, min(1000, int(limit)))
         storage = self.config.get("storage") or {}
         path = str(storage.get("log_path") or "")
@@ -1333,6 +1343,7 @@ class AgentApp:
                 level=level,
                 event=event,
                 guard_id=guard_id,
+                recovery_id=recovery_id,
                 since=since,
                 backup_count=backups,
             )
@@ -1343,11 +1354,19 @@ class AgentApp:
             level=level,
             event=event,
             guard_id=guard_id,
+            recovery_id=recovery_id,
             since=since,
             limit=limit,
         )
 
-    def api_logs_export(self, level=None, event=None, guard_id=None, since=None):
+    def api_logs_export(
+        self,
+        level=None,
+        event=None,
+        guard_id=None,
+        recovery_id=None,
+        since=None,
+    ):
         storage = self.config.get("storage") or {}
         path = str(storage.get("log_path") or "")
         backups = int(storage.get("log_backups") or 2)
@@ -1358,6 +1377,7 @@ class AgentApp:
                 level=level,
                 event=event,
                 guard_id=guard_id,
+                recovery_id=recovery_id,
                 since=since,
                 backup_count=backups,
             )
@@ -1368,6 +1388,7 @@ class AgentApp:
             level=level,
             event=event,
             guard_id=guard_id,
+            recovery_id=recovery_id,
             since=since,
         )
         lines = [json.dumps(item, ensure_ascii=False, separators=(",", ":")) for item in items]

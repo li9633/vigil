@@ -32,6 +32,7 @@ def _new_state():
         "recovery_rounds": 0,
         "rearm_at": 0,
         "updated_at": 0,
+        "last_recovery_id": "",
     }
 
 
@@ -87,6 +88,9 @@ class GuardStateMachine:
                     for item in failures
                     if isinstance(item, (int, float)) and not isinstance(item, bool)
                 ]
+            recovery_id = raw.get("last_recovery_id")
+            if isinstance(recovery_id, str):
+                state["last_recovery_id"] = recovery_id
             states[str(guard_id)] = state
         return states
 
@@ -207,11 +211,13 @@ class GuardStateMachine:
                 return False
             return now >= float(state.get("rearm_at") or 0)
 
-    def start_recovery(self, guard_id, now=None):
+    def start_recovery(self, guard_id, now=None, recovery_id=None):
         with self._lock:
             state = self._states.setdefault(str(guard_id), _new_state())
             state["status"] = STATE_RECOVERING
             state["updated_at"] = float(now if now is not None else self.now())
+            if recovery_id:
+                state["last_recovery_id"] = str(recovery_id)
             self._save()
             return copy.deepcopy(state)
 

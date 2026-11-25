@@ -106,6 +106,19 @@ class GuardStateMachineTest(unittest.TestCase):
         self.assertEqual(state["status"], STATE_FAILED)
         self.assertTrue(self.fsm.should_recover(guard["id"], now=201))
 
+    def test_recovery_id_is_persisted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "guards.json")
+            fsm = GuardStateMachine(state_path=path)
+            guard = _guard()
+            fsm.process(guard, "critical", now=100)
+            fsm.process(guard, "critical", now=130)
+            fsm.start_recovery(guard["id"], now=140, recovery_id="r-1")
+            self.assertEqual(fsm.snapshot(guard["id"])["last_recovery_id"], "r-1")
+
+            restored = GuardStateMachine(state_path=path)
+            self.assertEqual(restored.snapshot(guard["id"])["last_recovery_id"], "r-1")
+
     def test_state_is_persisted(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "guards.json")

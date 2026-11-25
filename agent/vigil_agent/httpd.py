@@ -583,6 +583,7 @@ def _parse_log_filters(query):
         "level": first("level"),
         "event": first("event"),
         "guard_id": first("guard_id"),
+        "recovery_id": first("recovery_id"),
         "since": since,
     }
 

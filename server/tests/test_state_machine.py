@@ -49,8 +49,12 @@ def _add_heartbeat(
         )
 
 
-def _guard(status: str, name: str = "断网自动尝试恢复") -> dict[str, Any]:
-    return {
+def _guard(
+    status: str,
+    name: str = "断网自动尝试恢复",
+    recovery_id: str = "",
+) -> dict[str, Any]:
+    payload = {
         "id": GUARD_ID,
         "name": name,
         "template": "network.up",
@@ -58,7 +62,9 @@ def _guard(status: str, name: str = "断网自动尝试恢复") -> dict[str, Any
         "check_status": "critical" if status in ("FAILED", "GAVE_UP") else "ok",
         "failure_count": 2,
         "checks": {"carrier": {"status": "ok"}},
+        "last_recovery_id": recovery_id,
     }
+    return payload
 
 
 def _add_client(
@@ -314,6 +320,32 @@ def test_guard_failed_creates_single_incident(db_ready: None) -> None:
         incidents = db.scalars(select(Incident)).all()
         assert len(incidents) == 1
         assert incidents[0].state == "DOWN"
+
+
+def test_guard_incident_evidence_includes_recovery_id(db_ready: None) -> None:
+    import json
+
+    now = utcnow()
+    _add_client(last_seen=now, last_beacon=now)
+    _add_heartbeat(guards={GUARD_ID: _guard("FAILED", recovery_id="r-42")}, received_at=now)
+
+    with session_scope() as db:
+        touched = scan_guards(db, now)
+        assert len(touched) == 1
+        evidence = json.loads(touched[0].evidence_json)
+        assert evidence["recovery_id"] == "r-42"
+
+    # 无 recovery_id 时不写入该字段，避免产生空值噪音
+    with session_scope() as db:
+        incident = db.scalars(select(Incident)).one()
+        incident.recovered_at = now
+        incident.state = "RECOVERED"
+    later = now + timedelta(seconds=60)
+    _add_heartbeat(guards={GUARD_ID: _guard("FAILED")}, received_at=later)
+    with session_scope() as db:
+        touched = scan_guards(db, later)
+        assert len(touched) == 1
+        assert "recovery_id" not in json.loads(touched[0].evidence_json)
 
 
 def test_guard_recovery_closes_incident(db_ready: None) -> None:

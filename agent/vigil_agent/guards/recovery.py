@@ -34,7 +34,7 @@ class RecoveryRunner:
 
     def run(self, guard):
         guard_id = str(guard.get("id"))
-        self.fsm.start_recovery(guard_id)
+        self.fsm.start_recovery(guard_id, recovery_id=self.recovery_id)
         attempts = []
         executed_any = False
 

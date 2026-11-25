@@ -293,6 +293,12 @@ def _match_guard(item, guard_id):
     return str((item.get("guard") or {}).get("id") or "") == str(guard_id)
 
 
+def _match_recovery(item, recovery_id):
+    if not recovery_id:
+        return True
+    return str(item.get("recovery_id") or "") == str(recovery_id)
+
+
 def _event_epoch(item):
     raw = item.get("ts")
     if isinstance(raw, (int, float)):
@@ -303,7 +309,15 @@ def _event_epoch(item):
         return 0.0
 
 
-def filter_events(items, level=None, event=None, guard_id=None, since=None, limit=None):
+def filter_events(
+    items,
+    level=None,
+    event=None,
+    guard_id=None,
+    recovery_id=None,
+    since=None,
+    limit=None,
+):
     since_value = float(since) if since not in (None, "") else 0.0
     selected = []
     for item in items:
@@ -314,6 +328,8 @@ def filter_events(items, level=None, event=None, guard_id=None, since=None, limi
         if not _match_event(item, event):
             continue
         if not _match_guard(item, guard_id):
+            continue
+        if not _match_recovery(item, recovery_id):
             continue
         if since_value and _event_epoch(item) < since_value:
             continue
@@ -391,6 +407,7 @@ def read_log_events(
     level=None,
     event=None,
     guard_id=None,
+    recovery_id=None,
     since=None,
     backup_count=DEFAULT_BACKUPS,
 ):
@@ -406,7 +423,14 @@ def read_log_events(
         for item in iterator:
             if len(collected) >= limit:
                 break
-            if not filter_events([item], level=level, event=event, guard_id=guard_id, since=since):
+            if not filter_events(
+                [item],
+                level=level,
+                event=event,
+                guard_id=guard_id,
+                recovery_id=recovery_id,
+                since=since,
+            ):
                 continue
             collected.append(item)
         if len(collected) >= limit:
@@ -420,6 +444,7 @@ def export_log_events(
     level=None,
     event=None,
     guard_id=None,
+    recovery_id=None,
     since=None,
     max_lines=10000,
     max_bytes=5 * 1024 * 1024,
@@ -433,7 +458,14 @@ def export_log_events(
             _iter_gzip_lines(source) if compressed else _iter_file_lines(source)
         )
         for item in iterator:
-            if not filter_events([item], level=level, event=event, guard_id=guard_id, since=since):
+            if not filter_events(
+                [item],
+                level=level,
+                event=event,
+                guard_id=guard_id,
+                recovery_id=recovery_id,
+                since=since,
+            ):
                 continue
             line = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
             size = len(line.encode("utf-8")) + 1

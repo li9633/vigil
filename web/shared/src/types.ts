@@ -512,6 +512,7 @@ export interface LogQuery {
   level?: string
   event?: string
   guard_id?: string
+  recovery_id?: string
   since?: number
 }
 

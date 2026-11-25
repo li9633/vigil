@@ -45,6 +45,7 @@ const error = ref('')
 const level = ref('')
 const event = ref('')
 const guardId = ref('')
+const recoveryId = ref('')
 const range = ref('1h')
 const limit = ref(200)
 
@@ -82,6 +83,7 @@ function buildQuery(includeLimit = true): LogQuery {
   if (level.value) query.level = level.value
   if (event.value.trim()) query.event = event.value.trim()
   if (guardId.value) query.guard_id = guardId.value
+  if (recoveryId.value.trim()) query.recovery_id = recoveryId.value.trim()
   if (selected && selected.seconds > 0) {
     query.since = Math.floor(Date.now() / 1000) - selected.seconds
   }
@@ -201,6 +203,17 @@ onMounted(() => {
             <datalist id="log-event-hints">
               <option v-for="hint in EVENT_HINTS" :key="hint" :value="hint" />
             </datalist>
+          </label>
+          <label class="field">
+            <span class="field-label">恢复 ID</span>
+            <el-input
+              v-model="recoveryId"
+              size="small"
+              clearable
+              placeholder="recovery_id"
+              @keyup.enter="load"
+              @clear="load"
+            />
           </label>
           <label class="field">
             <span class="field-label">时间范围</span>

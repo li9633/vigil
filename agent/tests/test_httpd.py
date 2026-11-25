@@ -221,7 +221,13 @@ class HttpdTestBase(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(
             self.log_filters,
-            {"level": "warn", "event": "guard.", "guard_id": "abc", "since": 100.0},
+            {
+                "level": "warn",
+                "event": "guard.",
+                "guard_id": "abc",
+                "recovery_id": None,
+                "since": 100.0,
+            },
         )
 
         status, body, headers = self.request_raw(

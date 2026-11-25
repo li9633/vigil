@@ -13,6 +13,7 @@ import {
   getErrorMessage,
   type ClientDetail,
   type GuardDefinition,
+  type Incident,
 } from '@vigil/shared'
 import { adminApi } from '@/api/admin'
 import LatencyChart from '@/components/LatencyChart.vue'
@@ -35,6 +36,11 @@ const client = computed(() => detail.value?.client ?? null)
 const modules = computed(() => detail.value?.modules ?? [])
 const guards = computed(() => detail.value?.guards ?? [])
 const heartbeats = computed(() => detail.value?.heartbeats ?? [])
+function recoveryIdOf(incident: Incident): string {
+  const value = incident.evidence?.recovery_id
+  return typeof value === 'string' ? value : ''
+}
+
 const incidents = computed(() =>
   [...(detail.value?.incidents ?? [])].sort(
     (a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime(),
@@ -410,6 +416,9 @@ onMounted(load)
                   </span>
                 </div>
                 <span class="compact-meta muted">
+                  <span v-if="recoveryIdOf(incident)" class="mono" :title="recoveryIdOf(incident)">
+                    recovery {{ recoveryIdOf(incident).slice(0, 8) }}…
+                  </span>
                   <TimeText :value="incident.started_at" />
                 </span>
               </li>

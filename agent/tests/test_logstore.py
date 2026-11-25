@@ -97,6 +97,7 @@ class FilterTest(unittest.TestCase):
                 "level": "warn",
                 "event": "guard.recover.start",
                 "guard": {"id": "b"},
+                "recovery_id": "r-1",
             },
             {
                 "ts": "2026-01-01T00:00:02.000+00:00",
@@ -111,6 +112,11 @@ class FilterTest(unittest.TestCase):
         self.assertEqual(len(filter_events(self.items, event="guard.")), 2)
         self.assertEqual(len(filter_events(self.items, guard_id="a")), 2)
         self.assertEqual(len(filter_events(self.items, guard_id="a", level="error")), 1)
+
+    def test_recovery_id(self):
+        self.assertEqual(len(filter_events(self.items, recovery_id="r-1")), 1)
+        self.assertEqual(len(filter_events(self.items, recovery_id="missing")), 0)
+        self.assertEqual(len(filter_events(self.items, recovery_id="r-1", level="error")), 0)
 
     def test_since_and_limit(self):
         since = datetime.datetime.fromisoformat(
