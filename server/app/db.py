@@ -55,11 +55,34 @@ def get_engine() -> Engine:
 
 
 def init_db() -> None:
-    """建表（不使用 Alembic）。"""
+    """建表并做轻量列迁移（不使用 Alembic）。"""
     # 先导入模型以完成元数据注册
     from app import models  # noqa: F401
 
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+
+    # SQLite 不支持 create_all 补列，这里做一次幂等迁移
+    from sqlalchemy import inspect, text
+
+    with engine.begin() as connection:
+        columns = {item["name"] for item in inspect(connection).get_columns("heartbeats")}
+        if "guards_json" not in columns:
+            connection.execute(
+                text("ALTER TABLE heartbeats ADD COLUMN guards_json TEXT DEFAULT '{}'")
+            )
+
+        incident_columns = {
+            item["name"] for item in inspect(connection).get_columns("incidents")
+        }
+        if "guard_id" not in incident_columns:
+            connection.execute(
+                text("ALTER TABLE incidents ADD COLUMN guard_id VARCHAR(64)")
+            )
+        if "guard_name" not in incident_columns:
+            connection.execute(
+                text("ALTER TABLE incidents ADD COLUMN guard_name VARCHAR(128)")
+            )
 
 
 def _session_factory_or_raise() -> sessionmaker[Session]:

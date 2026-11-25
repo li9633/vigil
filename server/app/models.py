@@ -49,6 +49,24 @@ class Heartbeat(Base):
     boot_id: Mapped[str] = mapped_column(String(64), default="")
     wan_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     modules_json: Mapped[str] = mapped_column(Text, default="{}")
+    guards_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class GuardConfig(Base):
+    """服务端下发的守护项配置（与客户端本地配置解耦）。"""
+
+    __tablename__ = "guards"
+
+    # 复合主键：同一客户端内 guard_id 唯一
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    guard_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    template: Mapped[str] = mapped_column(String(64), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 完整 Guard 配置 JSON（id/name/template/enabled/checks/policy/recovery/limits/evaluate）
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    config_hash: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class ClientEvent(Base):
@@ -69,6 +87,8 @@ class Incident(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64), index=True)
+    guard_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    guard_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     category: Mapped[str] = mapped_column(String(64))
     # SUSPECT / DOWN / RECOVERED
     state: Mapped[str] = mapped_column(String(16))

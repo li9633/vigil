@@ -9,19 +9,56 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.db import session_scope, utcnow
-from app.models import Client, ClientEvent, Incident
+from app.models import Client, ClientEvent, Heartbeat, Incident
 from app.security import hash_secret
 from app.settings import Thresholds
 from app.state_machine import (
+    CATEGORY_GUARD_FAILED,
     SilenceState,
     SignalSnapshot,
     evaluate,
     is_flapping,
     recover_incidents,
+    scan_guards,
     scan_once,
 )
 
 THRESHOLDS = Thresholds()
+
+GUARD_ID = "6f2c1a4e-9b7d-4c3a-8e51-2d4b6a8f0c37"
+
+
+def _add_heartbeat(
+    client_id: str = "cl_test",
+    *,
+    guards: dict[str, Any] | None = None,
+    received_at=None,
+) -> None:
+    import json
+
+    with session_scope() as db:
+        db.add(
+            Heartbeat(
+                client_id=client_id,
+                received_at=received_at or utcnow(),
+                seq=1,
+                uptime=100,
+                boot_id="boot-1",
+                guards_json=json.dumps(guards or {}, ensure_ascii=False),
+            )
+        )
+
+
+def _guard(status: str, name: str = "断网自动尝试恢复") -> dict[str, Any]:
+    return {
+        "id": GUARD_ID,
+        "name": name,
+        "template": "network.up",
+        "status": status,
+        "check_status": "critical" if status in ("FAILED", "GAVE_UP") else "ok",
+        "failure_count": 2,
+        "checks": {"carrier": {"status": "ok"}},
+    }
 
 
 def _add_client(
@@ -256,3 +293,94 @@ def test_recovery_marks_flapping(db_ready: None) -> None:
         ).first()
         assert latest is not None
         assert "flapping" in latest.summary
+
+
+def test_guard_failed_creates_single_incident(db_ready: None) -> None:
+    now = utcnow()
+    _add_client(last_seen=now, last_beacon=now)
+    _add_heartbeat(guards={GUARD_ID: _guard("FAILED")}, received_at=now)
+
+    with session_scope() as db:
+        touched = scan_guards(db, now)
+        assert len(touched) == 1
+        assert touched[0].category == CATEGORY_GUARD_FAILED
+        assert touched[0].guard_id == GUARD_ID
+        assert touched[0].guard_name == "断网自动尝试恢复"
+        assert touched[0].state == "DOWN"
+
+    with session_scope() as db:
+        touched = scan_guards(db, now)
+        assert len(touched) == 1
+        incidents = db.scalars(select(Incident)).all()
+        assert len(incidents) == 1
+        assert incidents[0].state == "DOWN"
+
+
+def test_guard_recovery_closes_incident(db_ready: None) -> None:
+    now = utcnow()
+    _add_client(last_seen=now, last_beacon=now)
+    _add_heartbeat(guards={GUARD_ID: _guard("FAILED")}, received_at=now)
+
+    with session_scope() as db:
+        scan_guards(db, now)
+
+    later = now + timedelta(seconds=60)
+    _add_heartbeat(guards={GUARD_ID: _guard("OK")}, received_at=later)
+
+    with session_scope() as db:
+        touched = scan_guards(db, later)
+        assert len(touched) == 1
+        assert touched[0].state == "RECOVERED"
+        assert touched[0].recovered_at is not None
+        assert "恢复" in touched[0].summary
+
+
+def test_guard_recovering_does_not_create_new_incident(db_ready: None) -> None:
+    now = utcnow()
+    _add_client(last_seen=now, last_beacon=now)
+    _add_heartbeat(guards={GUARD_ID: _guard("RECOVERING")}, received_at=now)
+
+    with session_scope() as db:
+        touched = scan_guards(db, now)
+        assert touched == []
+        assert db.scalars(select(Incident)).all() == []
+
+
+def test_client_recovery_does_not_close_guard_incident(db_ready: None) -> None:
+    now = utcnow()
+    with session_scope() as db:
+        db.add(
+            Incident(
+                client_id="cl_test",
+                guard_id=GUARD_ID,
+                guard_name="断网自动尝试恢复",
+                category=CATEGORY_GUARD_FAILED,
+                state="DOWN",
+                started_at=now,
+                detected_at=now,
+                summary="守护项失败",
+                evidence_json="{}",
+            )
+        )
+        db.add(
+            Incident(
+                client_id="cl_test",
+                category="agent_down",
+                state="DOWN",
+                started_at=now,
+                detected_at=now,
+                summary="客户端掉线",
+                evidence_json="{}",
+            )
+        )
+
+    with session_scope() as db:
+        recovered = recover_incidents(db, "cl_test", now)
+        assert len(recovered) == 1
+        assert recovered[0].category == "agent_down"
+
+    with session_scope() as db:
+        guard_incident = db.scalars(
+            select(Incident).where(Incident.guard_id == GUARD_ID)
+        ).one()
+        assert guard_incident.state == "DOWN"

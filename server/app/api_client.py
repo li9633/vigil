@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_session, utcnow
-from app.models import Beacon, Client, ClientEvent, Heartbeat
+from app.models import Beacon, Client, ClientEvent, GuardConfig, Heartbeat
 from app.schemas import (
     BeaconRequest,
     BeaconResponse,
@@ -41,9 +41,29 @@ router = APIRouter(prefix="/api/v1", tags=["client"])
 SUPPORTED_PROTOCOL = 1
 
 
-def build_policy(settings: Settings) -> dict[str, Any]:
-    """下发给客户端的策略配置。"""
-    return {
+def load_guard_configs(db: Session, client_id: str) -> list[dict[str, Any]]:
+    """读取该客户端在服务端配置的 Guard，按 guard_id 排序。"""
+    rows = db.scalars(
+        select(GuardConfig)
+        .where(GuardConfig.client_id == client_id)
+        .order_by(GuardConfig.guard_id)
+    ).all()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            config = json.loads(row.config_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(config, dict):
+            items.append(config)
+    return items
+
+
+def build_policy(
+    settings: Settings, guards: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """下发给客户端的策略配置；仅在存在服务端 Guard 时附带 guards。"""
+    policy: dict[str, Any] = {
         "schema_version": 1,
         "heartbeat_interval": settings.heartbeat_interval,
         "beacon_interval": 60,
@@ -60,10 +80,15 @@ def build_policy(settings: Settings) -> dict[str, Any]:
         },
         "config_poll_interval": 300,
     }
+    if guards:
+        policy["guards"] = guards
+    return policy
 
 
-def policy_etag(settings: Settings) -> str:
-    body = json.dumps(build_policy(settings), sort_keys=True, separators=(",", ":"))
+def policy_etag(settings: Settings, guards: list[dict[str, Any]] | None = None) -> str:
+    body = json.dumps(
+        build_policy(settings, guards), sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:32]
 
 
@@ -212,6 +237,7 @@ def heartbeat(
             boot_id=payload.boot_id,
             wan_ip=payload.wan_ip,
             modules_json=json.dumps(payload.modules, ensure_ascii=False),
+            guards_json=json.dumps(payload.guards, ensure_ascii=False),
         )
     )
 
@@ -235,7 +261,7 @@ def heartbeat(
 
     return HeartbeatResponse(
         server_time=int(time.time()),
-        config_etag=policy_etag(settings),
+        config_etag=policy_etag(settings, load_guard_configs(db, client.client_id)),
         actions_enabled=settings.actions_enabled,
     )
 
@@ -280,12 +306,13 @@ def submit_events(
 @router.get("/config")
 def get_config(
     request: Request,
+    db: Session = Depends(get_session),
     settings: Settings = Depends(settings_from_app),
     client: Client = Depends(require_client),
 ) -> Response:
-    del client  # 仅为鉴权
-    policy = build_policy(settings)
-    etag = policy_etag(settings)
+    guards = load_guard_configs(db, client.client_id)
+    policy = build_policy(settings, guards)
+    etag = policy_etag(settings, guards)
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
     return JSONResponse(content=policy, headers={"ETag": etag})

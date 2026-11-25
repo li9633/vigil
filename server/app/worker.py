@@ -16,7 +16,7 @@ from app.notifications import (
 )
 from app.security import purge_expired_nonces
 from app.settings import Settings, get_settings
-from app.state_machine import STATE_DOWN, STATE_RECOVERED, scan_once
+from app.state_machine import STATE_DOWN, STATE_RECOVERED, scan_guards, scan_once
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ def run_forever(settings: Settings) -> None:
                     flapping_window_seconds=settings.flapping_window_seconds,
                     flapping_threshold=settings.flapping_threshold,
                 )
+                touched.extend(scan_guards(db, now))
                 purged = purge_expired_nonces(db, now, settings.nonce_ttl_seconds)
                 _dispatch_notifications(db, touched, now)
                 if touched:

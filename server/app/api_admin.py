@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
+import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -12,7 +14,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session, utcnow
-from app.models import AuditLog, Client, ClientEvent, Heartbeat, Incident, Notification
+from app.models import (
+    AuditLog,
+    Client,
+    ClientEvent,
+    GuardConfig,
+    Heartbeat,
+    Incident,
+    Notification,
+)
 from app.notifications import (
     build_message,
     load_config,
@@ -81,6 +91,8 @@ def _serialize_incident(incident: Incident) -> dict[str, Any]:
     return {
         "id": incident.id,
         "client_id": incident.client_id,
+        "guard_id": incident.guard_id,
+        "guard_name": incident.guard_name,
         "category": incident.category,
         "state": incident.state,
         "started_at": iso_utc(incident.started_at),
@@ -98,6 +110,10 @@ def _serialize_heartbeat(heartbeat: Heartbeat) -> dict[str, Any]:
         modules = json.loads(heartbeat.modules_json or "{}")
     except json.JSONDecodeError:
         modules = {}
+    try:
+        guards = json.loads(heartbeat.guards_json or "{}")
+    except json.JSONDecodeError:
+        guards = {}
     received_at = iso_utc(heartbeat.received_at)
     return {
         "received_at": received_at,
@@ -107,6 +123,7 @@ def _serialize_heartbeat(heartbeat: Heartbeat) -> dict[str, Any]:
         "boot_id": heartbeat.boot_id,
         "wan_ip": heartbeat.wan_ip,
         "modules": modules,
+        "guards": guards,
     }
 
 
@@ -128,6 +145,34 @@ def _serialize_event(event: ClientEvent) -> dict[str, Any]:
         "message": payload.get("message") or payload.get("reason") or None,
         "payload": payload,
     }
+
+
+def _guards_from_heartbeat(heartbeat: Heartbeat | None) -> list[dict[str, Any]]:
+    """把最近一次心跳的 guards 字典展开成数组（供守护项状态表使用）。"""
+    if heartbeat is None:
+        return []
+    try:
+        guards = json.loads(heartbeat.guards_json or "{}")
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(guards, dict):
+        return []
+    items: list[dict[str, Any]] = []
+    for guard_id, value in guards.items():
+        if not isinstance(value, dict):
+            continue
+        items.append(
+            {
+                "id": str(guard_id),
+                "name": value.get("name"),
+                "template": value.get("template"),
+                "status": value.get("status"),
+                "check_status": value.get("check_status"),
+                "failure_count": value.get("failure_count"),
+                "checks": value.get("checks") or {},
+            }
+        )
+    return items
 
 
 def _modules_from_heartbeat(heartbeat: Heartbeat | None) -> list[dict[str, Any]]:
@@ -313,6 +358,7 @@ def get_client_detail(
     return {
         "client": _serialize_client(client, settings, now, _latest_incident_map(db, [client_id]).get(client_id)),
         "modules": _modules_from_heartbeat(heartbeats[0] if heartbeats else None),
+        "guards": _guards_from_heartbeat(heartbeats[0] if heartbeats else None),
         "heartbeats": [_serialize_heartbeat(hb) for hb in heartbeats],
         "incidents": [_serialize_incident(incident) for incident in incidents],
         "recent_events": [_serialize_event(event) for event in events],
@@ -506,3 +552,209 @@ def list_notification_records(
         select(Notification).order_by(Notification.id.desc()).limit(limit)
     ).all()
     return {"records": [serialize_notification(record) for record in records]}
+
+
+# --------------------------------------------------------------------------
+# 服务端守护项（Guard）配置：整体读写，供 /api/v1/config 下发
+# --------------------------------------------------------------------------
+
+
+def _require_client_row(db: Session, client_id: str) -> Client:
+    client = db.scalars(select(Client).where(Client.client_id == client_id)).one_or_none()
+    if client is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客户端不存在")
+    return client
+
+
+def _guard_config_hash(config: dict[str, Any]) -> str:
+    body = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:32]
+
+
+def _normalize_guard(raw: Any, index: int) -> dict[str, Any]:
+    """校验单个 Guard 配置并规范化 id / name。"""
+    if not isinstance(raw, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"guards[{index}] 必须是对象",
+        )
+
+    raw_id = raw.get("id")
+    if not isinstance(raw_id, str) or not raw_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"guards[{index}].id 必须是 UUID",
+        )
+    try:
+        # 统一存小写标准形式，避免同一 UUID 因写法不同被当成两个
+        guard_id = str(uuid.UUID(raw_id.strip()))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"guards[{index}].id 必须是 UUID",
+        ) from exc
+
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"guards[{index}].name 不能为空",
+        )
+
+    checks = raw.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"guards[{index}].checks 必须是非空数组",
+        )
+
+    if not isinstance(raw.get("policy"), dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"guards[{index}].policy 必须是对象",
+        )
+
+    if not isinstance(raw.get("recovery"), list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"guards[{index}].recovery 必须是数组",
+        )
+
+    return {**raw, "id": guard_id, "name": name.strip()}
+
+
+def _serialize_guard_rows(rows: list[GuardConfig]) -> dict[str, Any]:
+    """按 guard_id 升序返回配置对象；只暴露配置本身，不含存储元数据。"""
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            config = json.loads(row.config_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(config, dict):
+            items.append(config)
+    return {"items": items, "managed": bool(items)}
+
+
+@router.get("/clients/{client_id}/guards")
+def get_client_guards(
+    client_id: str,
+    db: Session = Depends(get_session),
+    _actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    _require_client_row(db, client_id)
+    rows = db.scalars(
+        select(GuardConfig)
+        .where(GuardConfig.client_id == client_id)
+        .order_by(GuardConfig.guard_id)
+    ).all()
+    return _serialize_guard_rows(list(rows))
+
+
+@router.put("/clients/{client_id}/guards")
+def update_client_guards(
+    client_id: str,
+    payload: dict[str, Any] = Body(...),
+    db: Session = Depends(get_session),
+    actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    _require_client_row(db, client_id)
+
+    raw_guards = payload.get("guards")
+    if not isinstance(raw_guards, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="guards 必须是数组"
+        )
+
+    configs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(raw_guards):
+        config = _normalize_guard(raw, index)
+        guard_id = str(config["id"])
+        if guard_id in seen:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"guard_id 重复: {guard_id}",
+            )
+        seen.add(guard_id)
+        configs.append(config)
+
+    now = utcnow()
+    existing = {
+        row.guard_id: row
+        for row in db.scalars(
+            select(GuardConfig).where(GuardConfig.client_id == client_id)
+        ).all()
+    }
+    for config in configs:
+        guard_id = str(config["id"])
+        row = existing.get(guard_id)
+        if row is None:
+            row = GuardConfig(client_id=client_id, guard_id=guard_id)
+            db.add(row)
+        row.name = str(config["name"])
+        row.template = str(config.get("template") or "")
+        row.enabled = bool(config.get("enabled", True))
+        row.config_json = json.dumps(config, ensure_ascii=False)
+        row.config_hash = _guard_config_hash(config)
+        row.updated_at = now
+
+    # 整体替换：删除本次未提交的记录
+    removed = 0
+    for guard_id, row in existing.items():
+        if guard_id not in seen:
+            db.delete(row)
+            removed += 1
+
+    db.add(
+        AuditLog(
+            actor=actor,
+            action="guards_update",
+            target=client_id,
+            ts=now,
+            detail=json.dumps(
+                {
+                    "count": len(configs),
+                    "removed": removed,
+                    "guard_ids": [str(config["id"]) for config in configs],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    rows = db.scalars(
+        select(GuardConfig)
+        .where(GuardConfig.client_id == client_id)
+        .order_by(GuardConfig.guard_id)
+    ).all()
+    return _serialize_guard_rows(list(rows))
+
+
+@router.delete("/clients/{client_id}/guards")
+def clear_client_guards(
+    client_id: str,
+    db: Session = Depends(get_session),
+    actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    _require_client_row(db, client_id)
+
+    rows = db.scalars(
+        select(GuardConfig).where(GuardConfig.client_id == client_id)
+    ).all()
+    removed = list(rows)
+    for row in removed:
+        db.delete(row)
+
+    db.add(
+        AuditLog(
+            actor=actor,
+            action="guards_clear",
+            target=client_id,
+            ts=utcnow(),
+            detail=json.dumps({"removed": len(removed)}, ensure_ascii=False),
+        )
+    )
+    db.commit()
+    return {"items": [], "managed": False}

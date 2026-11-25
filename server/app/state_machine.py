@@ -14,11 +14,15 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Client, Incident
+from app.models import Client, Heartbeat, Incident
 from app.settings import Thresholds
 
 CATEGORY_AGENT_DOWN = "agent_down"
 CATEGORY_HOST_OR_NET_DOWN = "host_or_net_down"
+CATEGORY_GUARD_FAILED = "guard_failed"
+
+SILENCE_CATEGORIES = (CATEGORY_AGENT_DOWN, CATEGORY_HOST_OR_NET_DOWN)
+GUARD_ALERT_STATES = ("FAILED", "GAVE_UP")
 
 STATE_SUSPECT = "SUSPECT"
 STATE_DOWN = "DOWN"
@@ -113,7 +117,11 @@ def _append_summary(summary: str | None, note: str) -> str:
 def get_open_incident(db: Session, client_id: str) -> Incident | None:
     stmt = (
         select(Incident)
-        .where(Incident.client_id == client_id, Incident.recovered_at.is_(None))
+        .where(
+            Incident.client_id == client_id,
+            Incident.category.in_(SILENCE_CATEGORIES),
+            Incident.recovered_at.is_(None),
+        )
         .order_by(Incident.started_at.asc())
     )
     return db.scalars(stmt).first()
@@ -166,7 +174,9 @@ def recover_incidents(
     open_incidents = list(
         db.scalars(
             select(Incident).where(
-                Incident.client_id == client_id, Incident.recovered_at.is_(None)
+                Incident.client_id == client_id,
+                Incident.category.in_(SILENCE_CATEGORIES),
+                Incident.recovered_at.is_(None),
             )
         ).all()
     )
@@ -184,7 +194,9 @@ def recover_incidents(
     recovered_times = list(
         db.scalars(
             select(Incident.recovered_at).where(
-                Incident.client_id == client_id, Incident.recovered_at.is_not(None)
+                Incident.client_id == client_id,
+                Incident.category.in_(SILENCE_CATEGORIES),
+                Incident.recovered_at.is_not(None),
             )
         ).all()
     )
@@ -230,5 +242,99 @@ def scan_once(
         )
         if incident is not None:
             touched.append(incident)
+    db.flush()
+    return touched
+
+
+def _latest_heartbeat(db: Session, client_id: str) -> Heartbeat | None:
+    stmt = (
+        select(Heartbeat)
+        .where(Heartbeat.client_id == client_id)
+        .order_by(Heartbeat.received_at.desc(), Heartbeat.id.desc())
+        .limit(1)
+    )
+    return db.scalars(stmt).first()
+
+
+def _guard_summary(guard: dict, status: str) -> str:
+    name = guard.get("name") or guard.get("id") or "-"
+    check_status = guard.get("check_status") or "-"
+    failures = guard.get("failure_count")
+    parts = [f"守护项 {name} 状态 {status}", f"检测结果 {check_status}"]
+    if isinstance(failures, int) and not isinstance(failures, bool):
+        parts.append(f"连续失败 {failures} 次")
+    return "；".join(parts)
+
+
+def scan_guards(db: Session, now: datetime) -> list[Incident]:
+    """根据心跳里的 guards 快照推进 Guard 级 incident。
+
+    - FAILED / GAVE_UP：创建或保持 DOWN，触发一次告警
+    - OK / DISABLED：关闭该 Guard 的 open incident，触发恢复通知
+    - PENDING / RECOVERING：不新建告警，避免抖动噪音
+    """
+    touched: list[Incident] = []
+    clients = db.scalars(select(Client).where(Client.enabled.is_(True))).all()
+    for client in clients:
+        heartbeat = _latest_heartbeat(db, client.client_id)
+        if heartbeat is None:
+            continue
+        try:
+            guards = json.loads(heartbeat.guards_json or "{}")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(guards, dict):
+            continue
+
+        for guard_id, guard in guards.items():
+            if not isinstance(guard, dict):
+                continue
+            guard_id = str(guard_id)
+            name = str(guard.get("name") or guard_id)
+            status = str(guard.get("status") or "")
+            open_incident = db.scalars(
+                select(Incident).where(
+                    Incident.client_id == client.client_id,
+                    Incident.guard_id == guard_id,
+                    Incident.recovered_at.is_(None),
+                )
+            ).first()
+
+            if status in GUARD_ALERT_STATES:
+                evidence = json.dumps(
+                    {
+                        "guard": guard,
+                        "heartbeat_seq": heartbeat.seq,
+                        "heartbeat_at": heartbeat.received_at.isoformat(),
+                    },
+                    ensure_ascii=False,
+                )
+                summary = _guard_summary(guard, status)
+                if open_incident is None:
+                    open_incident = Incident(
+                        client_id=client.client_id,
+                        guard_id=guard_id,
+                        guard_name=name,
+                        category=CATEGORY_GUARD_FAILED,
+                        state=STATE_DOWN,
+                        started_at=now,
+                        detected_at=now,
+                        summary=summary,
+                        evidence_json=evidence,
+                    )
+                    db.add(open_incident)
+                else:
+                    open_incident.state = STATE_DOWN
+                    open_incident.guard_name = name
+                    open_incident.summary = summary
+                    open_incident.evidence_json = evidence
+                touched.append(open_incident)
+            elif status in ("OK", "DISABLED") and open_incident is not None:
+                open_incident.state = STATE_RECOVERED
+                open_incident.recovered_at = now
+                open_incident.summary = _append_summary(
+                    open_incident.summary, f"recovered: 守护项 {name} 恢复"
+                )
+                touched.append(open_incident)
     db.flush()
     return touched

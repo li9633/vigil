@@ -48,6 +48,7 @@ class HeartbeatRequest(BaseModel):
     agent_version: str = ""
     wan_ip: str | None = None
     modules: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    guards: dict[str, dict[str, Any]] = Field(default_factory=dict)
     spool: SpoolStats | None = None
 
 
