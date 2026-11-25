@@ -5,6 +5,8 @@ import {
   type ClientEvent,
   type ClientLoginRequest,
   type ClientStatusSnapshot,
+  type GuardConfigResponse,
+  type GuardDefinition,
   type ListResponse,
 } from '@vigil/shared'
 
@@ -15,6 +17,11 @@ export const clientApi = {
   status: () => api.get<ClientStatusSnapshot>('/api/status'),
 
   checks: () => api.get<ListResponse<CheckItem>>('/api/checks'),
+
+  guards: () => api.get<GuardConfigResponse>('/api/guards'),
+
+  saveGuards: (guards: GuardDefinition[]) =>
+    api.put<GuardConfigResponse>('/api/guards', { guards }),
 
   events: (limit = 100) => api.get<ListResponse<ClientEvent>>('/api/events', { query: { limit } }),
 

@@ -29,6 +29,12 @@ const router = createRouter({
           meta: { title: '状态' },
         },
         {
+          path: 'guards',
+          name: 'guards',
+          component: () => import('@/views/GuardsView.vue'),
+          meta: { title: '守护项' },
+        },
+        {
           path: 'checks',
           name: 'checks',
           component: () => import('@/views/ChecksView.vue'),

@@ -19,6 +19,8 @@ const TONES: Record<string, UiStatusTone> = {
   FLAPPING: 'warn',
   BEACON_DOWN: 'warn',
   DEVICE_REBOOT: 'warn',
+  PENDING: 'warn',
+  RECOVERING: 'warn',
   CRITICAL: 'critical',
   DOWN: 'critical',
   OFFLINE: 'critical',
@@ -28,8 +30,10 @@ const TONES: Record<string, UiStatusTone> = {
   FAILED: 'critical',
   AGENT_DOWN: 'critical',
   HOST_OR_NET_DOWN: 'critical',
+  GAVE_UP: 'critical',
   UNKNOWN: 'unknown',
   DISABLED: 'unknown',
+  SKIPPED: 'unknown',
   NOT_CONFIGURED: 'unknown',
 }
 
@@ -50,6 +54,9 @@ const LABELS: Record<string, string> = {
   FLAPPING: '抖动中',
   BEACON_DOWN: 'beacon 缺失',
   DEVICE_REBOOT: '设备重启',
+  PENDING: '待确认',
+  RECOVERING: '恢复中',
+  GAVE_UP: '已放弃',
   CRITICAL: '严重',
   DOWN: '离线',
   OFFLINE: '离线',
@@ -61,6 +68,7 @@ const LABELS: Record<string, string> = {
   HOST_OR_NET_DOWN: '主机或网络中断',
   UNKNOWN: '未知',
   DISABLED: '已禁用',
+  SKIPPED: '已跳过',
   NOT_CONFIGURED: '未配置',
 }
 

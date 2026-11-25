@@ -1,4 +1,4 @@
-import { api, type AdminLoginRequest, type AdminLoginResponse, type Client, type ClientDetail, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview } from '@vigil/shared'
+import { api, type AdminLoginRequest, type AdminLoginResponse, type Client, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview } from '@vigil/shared'
 
 export interface IncidentQuery {
   state?: string
@@ -17,6 +17,17 @@ export const adminApi = {
 
   client: (id: string) =>
     api.get<ClientDetail>(`/api/v1/admin/clients/${encodeURIComponent(id)}`),
+
+  clientGuards: (id: string) =>
+    api.get<ClientGuardsResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/guards`),
+
+  saveClientGuards: (id: string, guards: GuardDefinition[]) =>
+    api.put<ClientGuardsResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/guards`, {
+      guards,
+    }),
+
+  clearClientGuards: (id: string) =>
+    api.delete<ClientGuardsResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/guards`),
 
   incidents: (query: IncidentQuery = {}) =>
     api.get<ListResponse<Incident>>('/api/v1/admin/incidents', {

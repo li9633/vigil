@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   EmptyState,
+  GuardEditor,
   LoadingBlock,
   StatusTag,
   TimeText,
@@ -10,6 +12,7 @@ import {
   formatLatency,
   getErrorMessage,
   type ClientDetail,
+  type GuardDefinition,
 } from '@vigil/shared'
 import { adminApi } from '@/api/admin'
 import LatencyChart from '@/components/LatencyChart.vue'
@@ -21,8 +24,16 @@ const detail = ref<ClientDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
 
+const guardConfig = ref<GuardDefinition[]>([])
+const guardManaged = ref(false)
+const guardError = ref('')
+const guardSaving = ref(false)
+const guardEditorOpen = ref(false)
+const guardEditorSelected = ref('')
+
 const client = computed(() => detail.value?.client ?? null)
 const modules = computed(() => detail.value?.modules ?? [])
+const guards = computed(() => detail.value?.guards ?? [])
 const heartbeats = computed(() => detail.value?.heartbeats ?? [])
 const incidents = computed(() =>
   [...(detail.value?.incidents ?? [])].sort(
@@ -54,12 +65,66 @@ async function load() {
   }
   loading.value = true
   error.value = ''
+  guardError.value = ''
   try {
-    detail.value = await adminApi.client(clientId.value)
+    const [detailData, guardData] = await Promise.all([
+      adminApi.client(clientId.value),
+      adminApi.clientGuards(clientId.value).catch((err) => {
+        guardError.value = getErrorMessage(err, '守护项配置加载失败')
+        return null
+      }),
+    ])
+    detail.value = detailData
+    if (guardData) {
+      guardConfig.value = Array.isArray(guardData.items) ? guardData.items : []
+      guardManaged.value = Boolean(guardData.managed)
+    }
   } catch (err) {
     error.value = getErrorMessage(err, '客户端详情加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+function openGuardEditor(selectedId = ''): void {
+  guardEditorSelected.value = selectedId
+  guardEditorOpen.value = true
+}
+
+async function handleGuardSave(payload: GuardDefinition[]) {
+  if (guardSaving.value || !clientId.value) return
+  guardSaving.value = true
+  try {
+    const result = await adminApi.saveClientGuards(clientId.value, payload)
+    guardConfig.value = result.items
+    guardManaged.value = result.managed
+    guardEditorOpen.value = false
+    ElMessage.success('守护项配置已下发，客户端将在下次配置轮询时生效')
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '下发失败，请检查配置'))
+  } finally {
+    guardSaving.value = false
+  }
+}
+
+async function clearGuardConfig() {
+  if (!clientId.value) return
+  try {
+    await ElMessageBox.confirm(
+      '清除后客户端将回退到本地守护项配置，确定继续？',
+      '清除服务端下发',
+      { type: 'warning', confirmButtonText: '清除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const result = await adminApi.clearClientGuards(clientId.value)
+    guardConfig.value = []
+    guardManaged.value = result.managed
+    ElMessage.success('已清除服务端下发配置')
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '清除失败'))
   }
 }
 
@@ -142,6 +207,134 @@ onMounted(load)
 
       <div class="panel">
         <div class="panel-head">
+          <span class="panel-title">守护项</span>
+          <span class="muted">{{ guards.length }} 项</span>
+        </div>
+        <div class="panel-body panel-body--flush">
+          <el-table :data="guards" size="small">
+            <el-table-column label="名称" min-width="160">
+              <template #default="{ row }">
+                <span>{{ row.name || row.id }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="模板" width="130">
+              <template #default="{ row }">
+                <span class="mono muted">{{ row.template || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="110">
+              <template #default="{ row }">
+                <StatusTag :status="row.status" size="sm" />
+              </template>
+            </el-table-column>
+            <el-table-column label="检测" width="100">
+              <template #default="{ row }">
+                <StatusTag :status="row.check_status || 'UNKNOWN'" size="sm" />
+              </template>
+            </el-table-column>
+            <el-table-column label="连续失败" width="100">
+              <template #default="{ row }">
+                <span class="mono">{{ row.failure_count ?? 0 }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="Check" min-width="180">
+              <template #default="{ row }">
+                <span class="mono muted">{{ Object.keys(row.checks ?? {}).length }} 项</span>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <EmptyState compact title="暂无守护项" description="等待客户端心跳上报守护项快照。" />
+            </template>
+          </el-table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">守护项配置（下发）</span>
+          <div class="panel-actions">
+            <el-tag v-if="guardManaged" size="small" type="success">已下发</el-tag>
+            <el-tag v-else size="small" type="info">未下发</el-tag>
+            <el-button size="small" type="primary" @click="openGuardEditor('')">
+              编辑配置
+            </el-button>
+            <el-button
+              v-if="guardManaged"
+              size="small"
+              text
+              type="danger"
+              @click="clearGuardConfig"
+            >
+              清除下发
+            </el-button>
+          </div>
+        </div>
+        <el-alert
+          v-if="guardError"
+          class="guard-error"
+          type="error"
+          show-icon
+          :closable="false"
+          :title="guardError"
+        >
+          <el-button size="small" text type="primary" @click="load">重试</el-button>
+        </el-alert>
+        <div class="panel-body panel-body--flush">
+          <el-table :data="guardConfig" size="small">
+            <el-table-column label="名称" min-width="160">
+              <template #default="{ row }">
+                <span>{{ row.name || row.id }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="模板" width="120">
+              <template #default="{ row }">
+                <span class="mono muted">{{ row.template || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="启用" width="80">
+              <template #default="{ row }">
+                <StatusTag
+                  :status="row.enabled === false ? 'DISABLED' : 'OK'"
+                  :label="row.enabled === false ? '停用' : '启用'"
+                  size="sm"
+                />
+              </template>
+            </el-table-column>
+            <el-table-column label="检测项" width="90">
+              <template #default="{ row }">
+                <span class="mono">{{ (row.checks ?? []).length }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="触发阈值" width="130">
+              <template #default="{ row }">
+                <span class="mono">
+                  {{ row.policy?.fail_threshold ?? 2 }} 次 / {{ row.policy?.interval ?? 30 }}s
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="恢复动作" width="100">
+              <template #default="{ row }">
+                <span class="mono">{{ (row.recovery ?? []).length }}</span>
+              </template>
+            </el-table-column>
+            <template #empty>
+              <EmptyState
+                compact
+                title="未下发守护项配置"
+                description="客户端将使用本地 config.json 中的守护项；点击“编辑配置”可创建并下发。"
+              />
+            </template>
+          </el-table>
+        </div>
+        <div class="panel-body">
+          <p class="muted guard-hint">
+            保存后客户端在下一次配置轮询（默认 ≤ 5 分钟）自动生效，届时客户端本地 UI 显示为只读。
+          </p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
           <span class="panel-title">模块状态</span>
           <span class="muted">{{ modules.length }} 个模块</span>
         </div>
@@ -211,7 +404,10 @@ onMounted(load)
               <li v-for="incident in incidents.slice(0, 6)" :key="incident.id" class="compact-item">
                 <div class="compact-main">
                   <StatusTag :status="incident.state" size="sm" />
-                  <span class="compact-title">{{ incident.summary || incident.category }}</span>
+                  <span class="compact-title">
+                    <template v-if="incident.guard_name">{{ incident.guard_name }} · </template>
+                    {{ incident.summary || incident.category }}
+                  </span>
                 </div>
                 <span class="compact-meta muted">
                   <TimeText :value="incident.started_at" />
@@ -269,6 +465,16 @@ onMounted(load)
         </div>
       </div>
     </template>
+
+    <GuardEditor
+      v-model="guardEditorOpen"
+      :guards="guardConfig"
+      :busy="guardSaving"
+      :selected-id="guardEditorSelected"
+      title="配置下发守护项"
+      hint="保存后写入服务端并通过 /api/v1/config 下发；客户端本地配置将变为只读。"
+      @save="handleGuardSave"
+    />
   </div>
 </template>
 
@@ -368,6 +574,21 @@ onMounted(load)
 }
 
 .panel-link {
+  font-size: var(--vigil-font-xs);
+}
+
+.panel-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--vigil-space-2);
+}
+
+.guard-error {
+  margin: var(--vigil-space-3) var(--vigil-space-3) 0;
+}
+
+.guard-hint {
+  margin: 0;
   font-size: var(--vigil-font-xs);
 }
 </style>

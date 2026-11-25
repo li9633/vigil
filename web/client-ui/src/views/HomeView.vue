@@ -24,6 +24,7 @@ let timer: number | undefined
 let seq = 0
 
 const modules = computed(() => status.value?.modules ?? [])
+const guards = computed(() => status.value?.guards ?? [])
 const latestChecks = computed(() => (status.value?.latest_checks ?? []).slice(0, 5))
 const serverConnected = computed(() => status.value?.server_connected ?? null)
 const spool = computed(() => status.value?.spool ?? null)
@@ -139,6 +140,29 @@ onBeforeUnmount(() => {
         <div v-for="cell in infoCells" :key="cell.label" class="info-cell">
           <span class="info-label">{{ cell.label }}</span>
           <span class="info-value mono">{{ cell.value }}</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">守护项</span>
+          <router-link class="panel-link" to="/guards">全部</router-link>
+        </div>
+        <ul v-if="guards.length" class="list">
+          <li v-for="guard in guards" :key="guard.id" class="list-item">
+            <div class="list-main">
+              <p class="list-title">{{ guard.name || guard.id }}</p>
+              <p class="list-meta">
+                {{ guard.template || '—' }} · 检测 {{ guard.check_status || '—' }}
+              </p>
+            </div>
+            <div class="list-side">
+              <StatusTag :status="guard.status" size="sm" />
+            </div>
+          </li>
+        </ul>
+        <div v-else class="panel-body">
+          <EmptyState compact title="暂无守护项" description="尚未配置守护项，或等待首轮检测结果。" />
         </div>
       </div>
 

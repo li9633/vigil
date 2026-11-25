@@ -154,6 +154,7 @@ export interface Overview {
 export interface ClientDetail {
   client: Client
   modules: HeartbeatModule[]
+  guards?: GuardSnapshot[]
   heartbeats: HeartbeatPoint[]
   incidents: Incident[]
   recent_events: Event[]
@@ -276,10 +277,95 @@ export interface ClientStatusSnapshot {
   last_heartbeat_at?: string | null
   last_beacon_at?: string | null
   modules?: HeartbeatModule[]
+  guards?: GuardSnapshot[]
+  guards_source?: 'local' | 'server' | string | null
+  guards_editable?: boolean | null
   latest_checks?: CheckItem[]
   spool?: { pending: number; dropped: number }
   maintenance?: boolean
   generated_at?: string | null
+}
+
+/** 单个 Check 的检测结果（Guard 内） */
+export interface GuardCheckResult {
+  id: string
+  probe?: string | null
+  status: StatusLevel | string
+  latency_ms?: number | null
+  evidence?: Record<string, unknown> | null
+}
+
+/** 守护项（Guard）运行时快照 */
+export interface GuardSnapshot {
+  id: string
+  name?: string | null
+  template?: string | null
+  /** OK / PENDING / FAILED / RECOVERING / GAVE_UP / DISABLED */
+  status?: string | null
+  /** 聚合后的检测状态：ok / warn / critical / unknown / skipped */
+  check_status?: StatusLevel | string | null
+  failure_count?: number | null
+  success_count?: number | null
+  recovery_rounds?: number | null
+  rearm_at?: number | null
+  checks?: Record<string, GuardCheckResult> | null
+}
+
+/** 单个 Check 的配置（Guard 定义） */
+export interface GuardCheckConfig {
+  id?: string | null
+  probe: string
+  params?: Record<string, unknown> | null
+  timeout?: number | null
+  depends_on?: string[] | null
+  role?: string | null
+}
+
+/** 触发策略 */
+export interface GuardPolicy {
+  interval?: number
+  fail_threshold?: number
+  fail_mode?: 'consecutive' | 'window' | string
+  fail_window?: number
+  success_threshold?: number
+  cooldown?: number
+  max_actions_per_hour?: number
+  gave_up_after?: number
+  backoff?: string
+}
+
+/** 恢复动作链中的一步 */
+export interface GuardRecoveryStep {
+  action: string
+  target?: string | null
+  verify_after?: number | null
+  continue_on_failure?: boolean
+}
+
+/** 可编辑的守护项定义（本地配置 / 服务端下发） */
+export interface GuardDefinition {
+  id: string
+  name: string
+  template?: string | null
+  enabled?: boolean
+  checks: GuardCheckConfig[]
+  policy?: GuardPolicy
+  recovery?: GuardRecoveryStep[]
+  limits?: Record<string, unknown>
+  evaluate?: Record<string, unknown>
+}
+
+/** GET/PUT /api/guards（客户端本地） */
+export interface GuardConfigResponse {
+  items: GuardDefinition[]
+  source: 'local' | 'server' | string
+  editable: boolean
+}
+
+/** GET/PUT/DELETE /api/v1/admin/clients/{id}/guards（服务端） */
+export interface ClientGuardsResponse {
+  items: GuardDefinition[]
+  managed: boolean
 }
 
 /** 检测项（GET /api/checks） */

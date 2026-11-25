@@ -175,7 +175,9 @@ onMounted(load)
           </el-table-column>
           <el-table-column label="摘要" min-width="220">
             <template #default="{ row }">
-              <span class="summary">{{ row.summary || '—' }}</span>
+              <span class="summary">
+                <template v-if="row.guard_name">[{{ row.guard_name }}] </template>{{ row.summary || '—' }}
+              </span>
             </template>
           </el-table-column>
           <el-table-column label="恢复时间" width="150">

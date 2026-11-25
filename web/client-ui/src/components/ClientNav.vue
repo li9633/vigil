@@ -8,6 +8,7 @@ interface NavItem {
 
 const items: NavItem[] = [
   { to: '/', label: '状态' },
+  { to: '/guards', label: '守护项' },
   { to: '/checks', label: '检测项' },
   { to: '/events', label: '事件' },
   { to: '/actions', label: '手动动作' },
