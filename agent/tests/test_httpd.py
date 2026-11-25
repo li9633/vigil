@@ -5,7 +5,6 @@ import json
 import os
 import tempfile
 import threading
-import time
 import unittest
 
 from vigil_agent.httpd import create_server

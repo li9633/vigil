@@ -37,7 +37,7 @@ class EventSpool:
     def _load_meta(self):
         meta = {"schema_version": 1, "seq": 0, "dropped": 0}
         try:
-            with open(self.meta_path, "r", encoding="utf-8") as handle:
+            with open(self.meta_path, encoding="utf-8") as handle:
                 loaded = json.load(handle)
         except (OSError, ValueError):
             return meta
@@ -66,7 +66,7 @@ class EventSpool:
         entries = []
         repaired = False
         try:
-            with open(self.path, "r", encoding="utf-8") as handle:
+            with open(self.path, encoding="utf-8") as handle:
                 lines = handle.read().splitlines()
         except OSError:
             return entries, False

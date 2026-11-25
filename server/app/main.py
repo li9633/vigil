@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware

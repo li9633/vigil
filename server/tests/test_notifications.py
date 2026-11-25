@@ -166,7 +166,7 @@ def test_email_ssl_sends_utf8_message(monkeypatch: pytest.MonkeyPatch) -> None:
         def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
             sent.update(host=host, port=port, timeout=timeout)
 
-        def __enter__(self) -> "FakeSMTPSSL":
+        def __enter__(self) -> FakeSMTPSSL:
             return self
 
         def __exit__(self, *exc: Any) -> bool:
@@ -207,7 +207,7 @@ def test_email_starttls_and_failure(monkeypatch: pytest.MonkeyPatch) -> None:
         def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
             calls["host"] = host
 
-        def __enter__(self) -> "FakeSMTP":
+        def __enter__(self) -> FakeSMTP:
             return self
 
         def __exit__(self, *exc: Any) -> bool:

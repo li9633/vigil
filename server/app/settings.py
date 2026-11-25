@@ -69,7 +69,7 @@ class Settings:
     log_compress: bool = True
 
     @classmethod
-    def from_env(cls) -> "Settings":
+    def from_env(cls) -> Settings:
         return cls(
             database_url=_env_str("VIGIL_DATABASE_URL", cls.database_url),
             bootstrap_token=_env_str("VIGIL_BOOTSTRAP_TOKEN", cls.bootstrap_token),

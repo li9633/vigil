@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import smtplib
+from collections.abc import Sequence
 from email.message import EmailMessage
-from typing import Sequence
 
 from app.notifiers.base import NotificationMessage, Notifier, SendResult
 

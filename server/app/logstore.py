@@ -16,7 +16,8 @@ import os
 import re
 import shutil
 import time
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 LOG_SCHEMA_VERSION = 1
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024
@@ -171,6 +172,8 @@ class CompressingRotatingFileHandler(logging.FileHandler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             message = self.format(record)
+            if self.stream is None:
+                return
             self.stream.write(message + self.terminator)
             self.flush()
             self._size += len(message.encode("utf-8")) + len(self.terminator)
@@ -182,7 +185,8 @@ class CompressingRotatingFileHandler(logging.FileHandler):
     def rotate(self) -> None:
         path = self.baseFilename
         try:
-            self.stream.close()
+            if self.stream is not None:
+                self.stream.close()
         except OSError:
             pass
         try:
@@ -269,7 +273,7 @@ def configure_logging(instance: str, settings: Any) -> str:
     )
     console = logging.StreamHandler()
     console.setFormatter(text_formatter)
-    console._vigil_handler = True
+    console._vigil_handler = True  # type: ignore[attr-defined]
     root.addHandler(console)
 
     try:
@@ -281,7 +285,7 @@ def configure_logging(instance: str, settings: Any) -> str:
             compress=settings.log_compress,
         )
         file_handler.setFormatter(JsonlFormatter())
-        file_handler._vigil_handler = True
+        file_handler._vigil_handler = True  # type: ignore[attr-defined]
         root.addHandler(file_handler)
     except OSError as exc:
         root.warning("无法写入服务端日志 %s：%s", path, exc)

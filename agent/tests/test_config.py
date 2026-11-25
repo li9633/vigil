@@ -220,7 +220,7 @@ class ConfigSaveTest(unittest.TestCase):
                 )
             cfg = load_config(path, env={})
             self.assertEqual(cfg["schema_version"], 2)
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 persisted = json.load(handle)
         self.assertEqual(persisted["schema_version"], 2)
         self.assertTrue(persisted["guards"])
@@ -234,7 +234,7 @@ class ConfigSaveTest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump({"server": {"client_id": "cl_legacy"}}, handle)
             cfg = load_config(path, env={"VIGIL_SERVER_SECRET": "env-only-secret"})
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 persisted = json.load(handle)
         self.assertEqual(cfg["server"]["secret"], "env-only-secret")
         self.assertEqual(persisted["server"]["secret"], "")
@@ -250,7 +250,7 @@ class ConfigSaveTest(unittest.TestCase):
                 path, env={"VIGIL_SERVER_BASE_URL": "https://vigil.example.com"}
             )
             self.assertEqual(cfg["server"]["base_url"], "https://vigil.example.com")
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 persisted = json.load(handle)
         self.assertEqual(persisted, raw)
 

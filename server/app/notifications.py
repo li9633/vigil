@@ -210,6 +210,8 @@ def validate_config(config: dict[str, Any]) -> None:
             if not str(email.get(field) or "").strip():
                 raise ValueError(f"邮件已启用：{message}")
         port = email.get("smtp_port")
+        if port is None:
+            raise ValueError("SMTP 端口必须是整数")
         try:
             port_number = int(port)
         except (TypeError, ValueError):
@@ -220,6 +222,8 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("邮件安全模式仅支持 ssl / starttls / none")
 
     rate_limit = config.get("rate_limit_per_hour")
+    if rate_limit is None:
+        raise ValueError("每小时通知上限必须是整数")
     try:
         rate_number = int(rate_limit)
     except (TypeError, ValueError):

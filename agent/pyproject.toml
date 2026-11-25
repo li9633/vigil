@@ -1,0 +1,28 @@
+[project]
+name = "vigil-agent"
+version = "0.1.0"
+description = "Vigil 客户端：检测、自愈与本地 UI（运行时仅标准库）"
+requires-python = ">=3.9"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17,<1.0",
+    "mypy>=1.18,<2.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+# 项目日志与异常消息统一使用 % 占位符，保留该风格
+ignore = ["UP031"]
+
+[tool.mypy]
+files = ["vigil_agent"]
+ignore_missing_imports = true

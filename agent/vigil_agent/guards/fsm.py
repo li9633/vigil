@@ -52,7 +52,7 @@ class GuardStateMachine:
         if not self.persist:
             return {}
         try:
-            with open(self.state_path, "r", encoding="utf-8") as handle:
+            with open(self.state_path, encoding="utf-8") as handle:
                 data = json.load(handle)
         except (OSError, ValueError):
             return {}

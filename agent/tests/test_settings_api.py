@@ -57,7 +57,7 @@ class SettingsApiTest(unittest.TestCase):
         self.assertEqual(payload["server"]["heartbeat_interval"], 60)
         self.assertEqual(self.app.scheduler._tasks["heartbeat"]["interval"], 60.0)
 
-        with open(self.config_path, "r", encoding="utf-8") as handle:
+        with open(self.config_path, encoding="utf-8") as handle:
             stored = json.load(handle)
         self.assertEqual(stored["server"]["base_url"], "http://192.0.2.10:5000")
         self.assertEqual(stored["server"]["heartbeat_interval"], 60)

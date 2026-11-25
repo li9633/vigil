@@ -6,16 +6,16 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Client, Heartbeat, Incident
 from app.logstore import log_event
+from app.models import Client, Heartbeat, Incident
 from app.settings import Thresholds
 
 CATEGORY_AGENT_DOWN = "agent_down"

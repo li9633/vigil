@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-
 from datetime import timedelta
 
 from app.db import init_db, init_engine, session_scope, utcnow

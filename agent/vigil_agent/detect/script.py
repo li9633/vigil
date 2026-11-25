@@ -80,7 +80,7 @@ def _check_directory(directory):
 def _read_manifest(directory):
     path = os.path.join(directory, MANIFEST_NAME)
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
     except FileNotFoundError:
         return None, "未找到脚本探测器清单：%s" % path
@@ -462,6 +462,6 @@ def delete_script(name, directory=None):
         except FileNotFoundError:
             pass
         except OSError as exc:
-            raise ValueError("删除脚本文件失败：%s" % exc)
+            raise ValueError("删除脚本文件失败：%s" % exc) from exc
     return True
 

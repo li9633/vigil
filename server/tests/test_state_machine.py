@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
-from typing import Any, Callable
+from typing import Any
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -14,8 +15,8 @@ from app.security import hash_secret
 from app.settings import Thresholds
 from app.state_machine import (
     CATEGORY_GUARD_FAILED,
-    SilenceState,
     SignalSnapshot,
+    SilenceState,
     evaluate,
     is_flapping,
     recover_incidents,

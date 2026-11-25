@@ -37,7 +37,7 @@ def detect(ctx):
 
     path = os.path.join(ctx.sys_class_net, device, "carrier")
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             value = handle.read().strip()
     except OSError as exc:
         return make_result(

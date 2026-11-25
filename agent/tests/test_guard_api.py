@@ -104,7 +104,7 @@ class AgentAppGuardTest(unittest.TestCase):
         self.assertEqual([item["id"] for item in self.app.config["guards"]], [new_guard["id"]])
         self.assertEqual(self.app._guard_last_run, {})
 
-        with open(self.config_path, "r", encoding="utf-8") as handle:
+        with open(self.config_path, encoding="utf-8") as handle:
             persisted = json.load(handle)
         self.assertEqual([item["id"] for item in persisted["guards"]], [new_guard["id"]])
 

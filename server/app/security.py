@@ -94,7 +94,7 @@ def purge_expired_nonces(db: Session, now: datetime, ttl_seconds: int) -> int:
     """清理过期 nonce，返回删除条数。"""
     cutoff = now - timedelta(seconds=ttl_seconds)
     result = db.execute(delete(Nonce).where(Nonce.seen_at < cutoff))
-    return int(result.rowcount or 0)
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 def authenticate_client(

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
@@ -16,7 +17,7 @@ _session_factory: sessionmaker[Session] | None = None
 
 def utcnow() -> datetime:
     """当前 UTC 时间（naive），与 SQLite 存储格式保持一致。"""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 class Base(DeclarativeBase):

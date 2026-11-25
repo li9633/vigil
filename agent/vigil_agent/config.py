@@ -156,7 +156,7 @@ def apply_env(cfg, env):
             else:
                 value = str(raw).strip()
         except ValueError:
-            raise ConfigError("环境变量 %s 类型无效：%s" % (name, raw))
+            raise ConfigError("环境变量 %s 类型无效：%s" % (name, raw)) from None
         section_obj = cfg.setdefault(section, {})
         if not isinstance(section_obj, dict):
             raise ConfigError("配置节 %s 必须是对象" % section)
@@ -318,12 +318,12 @@ def load_config(path=None, env=None, persist_migration=True):
     needs_persist = False
     if os.path.exists(path):
         try:
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 data = json.load(handle)
         except OSError as exc:
-            raise ConfigError("读取配置文件失败：%s" % exc)
+            raise ConfigError("读取配置文件失败：%s" % exc) from exc
         except ValueError as exc:
-            raise ConfigError("配置文件不是合法 JSON：%s" % exc)
+            raise ConfigError("配置文件不是合法 JSON：%s" % exc) from exc
         if not isinstance(data, dict):
             raise ConfigError("配置文件根节点必须是 JSON 对象")
         _deep_merge(cfg, data)

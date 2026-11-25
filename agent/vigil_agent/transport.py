@@ -30,7 +30,7 @@ def read_boot_id(
 ):
     """读取内核 boot_id；不存在时使用持久化随机值，保证跨重启稳定。"""
     try:
-        with open(proc_path, "r", encoding="utf-8") as handle:
+        with open(proc_path, encoding="utf-8") as handle:
             value = handle.read().strip()
         if value:
             return value
@@ -38,7 +38,7 @@ def read_boot_id(
         pass
 
     try:
-        with open(fallback_path, "r", encoding="utf-8") as handle:
+        with open(fallback_path, encoding="utf-8") as handle:
             value = handle.read().strip()
         if value:
             return value
@@ -101,7 +101,7 @@ class UrllibHttpClient:
                 raw = b""
             return int(exc.code), resp_headers, raw
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
-            raise TransportError(str(exc))
+            raise TransportError(str(exc)) from exc
 
 
 def _parse_json(raw):

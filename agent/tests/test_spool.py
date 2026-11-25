@@ -84,7 +84,7 @@ class SpoolTest(unittest.TestCase):
         spool = EventSpool(self.dir)
         self.assertEqual([item["seq"] for item in spool.pending(10)], [1])
         # 修复后文件应为合法 jsonl
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             lines = [line for line in handle.read().splitlines() if line.strip()]
         self.assertEqual(len(lines), 1)
         json.loads(lines[0])

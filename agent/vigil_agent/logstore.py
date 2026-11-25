@@ -341,7 +341,7 @@ def filter_events(
 
 def _iter_file_lines(path, reverse=False):
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        with open(path, encoding="utf-8", errors="replace") as handle:
             lines = handle.readlines()
     except OSError:
         return

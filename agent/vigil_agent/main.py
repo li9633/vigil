@@ -25,22 +25,31 @@ from urllib.parse import urlparse
 from . import PROTOCOL_VERSION, __version__
 from .action.executor import ActionExecutor
 from .config import DEFAULT_CONFIG_PATH, ConfigError, load_config, save_config
-from .detect.script import (
-    delete_script,
-    inspect_scripts,
-    save_script,
-)
 from .detect.base import (
-    CommandRunner,
-    DetectContext,
-    DetectionEngine,
     STATUS_CRITICAL,
     STATUS_OK,
     STATUS_SKIPPED,
     STATUS_UNKNOWN,
     STATUS_WARN,
+    CommandRunner,
+    DetectContext,
+    DetectionEngine,
 )
+from .detect.script import (
+    delete_script,
+    inspect_scripts,
+    save_script,
+)
+from .guards import (
+    BUILTIN_PROBE_INFO,
+    GuardStateMachine,
+    aggregate_status,
+    run_checks,
+    validate_guards,
+)
+from .guards.recovery import RecoveryRunner
 from .httpd import create_server
+from .lockfile import FileLock
 from .logstore import (
     CompressingRotatingFileHandler,
     JsonlFormatter,
@@ -51,15 +60,6 @@ from .logstore import (
     read_log_events,
     set_log_context,
 )
-from .guards import (
-    BUILTIN_PROBE_INFO,
-    GuardStateMachine,
-    aggregate_status,
-    run_checks,
-    validate_guards,
-)
-from .guards.recovery import RecoveryRunner
-from .lockfile import FileLock
 from .scheduler import IntervalScheduler
 from .spool import EventSpool
 from .transport import Transport
@@ -126,7 +126,7 @@ class RuntimeState:
 
 def read_uptime(path="/proc/uptime"):
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             return int(float(handle.read().split()[0]))
     except (OSError, ValueError, IndexError):
         return int(time.monotonic())
@@ -134,7 +134,7 @@ def read_uptime(path="/proc/uptime"):
 
 def read_first_line(path, default=""):
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             value = handle.readline().strip()
             return value or default
     except OSError:
@@ -144,7 +144,7 @@ def read_first_line(path, default=""):
 def read_fw_version(path="/etc/openwrt_release"):
     fields = {}
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        with open(path, encoding="utf-8") as handle:
             for line in handle:
                 if "=" not in line:
                     continue
@@ -1242,7 +1242,7 @@ class AgentApp:
             try:
                 heartbeat = int(payload["heartbeat_interval"])
             except (TypeError, ValueError):
-                raise ValueError("心跳间隔必须是整数")
+                raise ValueError("心跳间隔必须是整数") from None
             if not 10 <= heartbeat <= 300:
                 raise ValueError("心跳间隔必须在 10-300 秒之间")
 
@@ -1264,7 +1264,7 @@ class AgentApp:
                 try:
                     limit = int(safety_payload["max_actions_per_hour"])
                 except (TypeError, ValueError):
-                    raise ValueError("每小时动作上限必须是整数")
+                    raise ValueError("每小时动作上限必须是整数") from None
                 if not 1 <= limit <= 60:
                     raise ValueError("每小时动作上限必须在 1-60 之间")
                 safety_updates["max_actions_per_hour"] = limit
@@ -1274,7 +1274,7 @@ class AgentApp:
             try:
                 maintenance = int(payload["maintenance_minutes"])
             except (TypeError, ValueError):
-                raise ValueError("维护窗口必须是整数分钟")
+                raise ValueError("维护窗口必须是整数分钟") from None
             if not 0 <= maintenance <= 1440:
                 raise ValueError("维护窗口必须在 0-1440 分钟之间")
 
@@ -1514,7 +1514,7 @@ class AgentApp:
             os.path.dirname(self.config_path or DEFAULT_CONFIG_PATH), "admin_token"
         )
         try:
-            with open(token_path, "r", encoding="utf-8") as handle:
+            with open(token_path, encoding="utf-8") as handle:
                 existing = handle.read().strip()
             if existing:
                 return existing

@@ -5,12 +5,16 @@
 """
 
 import os
+from types import ModuleType
+from typing import Optional
 
+fcntl: Optional[ModuleType]
 try:
     import fcntl
 except ImportError:  # Windows
     fcntl = None
 
+msvcrt: Optional[ModuleType]
 try:
     import msvcrt
 except ImportError:  # POSIX

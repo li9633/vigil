@@ -3,8 +3,6 @@
 import time
 import uuid
 
-from .fsm import GuardStateMachine
-
 
 class RecoveryRunner:
     """执行 Guard 的恢复动作链。

@@ -102,7 +102,7 @@ class ActionExecutor:
 
     def _load_state(self):
         try:
-            with open(self.state_path, "r", encoding="utf-8") as handle:
+            with open(self.state_path, encoding="utf-8") as handle:
                 state = json.load(handle)
         except (OSError, ValueError):
             return _empty_state()
