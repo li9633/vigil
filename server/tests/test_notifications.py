@@ -317,14 +317,14 @@ def test_get_notifications_defaults_and_env_fallback(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _login(client)
-    data = client.get("/api/v1/admin/notifications").json()
+    data = client.get("/api/v1/admin/notifications").json()["data"]
     assert data["config"]["feishu"] == {"enabled": False, "webhook": ""}
     assert data["config"]["email"]["security"] == "ssl"
     assert data["config"]["rate_limit_per_hour"] == 10
     assert data["records"] == []
 
     monkeypatch.setenv("VIGIL_FEISHU_WEBHOOK", "https://open.feishu.cn/hook/abcdef")
-    fallback = client.get("/api/v1/admin/notifications").json()["config"]
+    fallback = client.get("/api/v1/admin/notifications").json()["data"]["config"]
     assert fallback["feishu"]["enabled"] is True
     assert fallback["feishu"]["webhook"] == "****cdef"
 
@@ -348,7 +348,7 @@ def test_put_notifications_masks_and_keeps_secret(client: TestClient) -> None:
     }
     response = client.put("/api/v1/admin/notifications", json=payload)
     assert response.status_code == 200, response.text
-    masked = response.json()["config"]
+    masked = response.json()["data"]["config"]
     assert masked["feishu"]["webhook"] == "****1234"
     assert masked["email"]["password"] == "****cret"
 
@@ -410,11 +410,11 @@ def test_test_notification_endpoint(
 
     response = client.post("/api/v1/admin/notifications/test", json={"channel": "feishu"})
     assert response.status_code == 200, response.text
-    assert response.json()["results"] == [{"channel": "feishu", "ok": True, "error": ""}]
+    assert response.json()["data"]["results"] == [{"channel": "feishu", "ok": True, "error": ""}]
     assert recorder.messages[0].title == "[Vigil] 通知测试"
     assert "飞书" in recorder.messages[0].body
 
-    records = client.get("/api/v1/admin/notifications/records").json()["records"]
+    records = client.get("/api/v1/admin/notifications/records").json()["data"]["records"]
     assert records[0]["kind"] == "test"
     assert records[0]["status"] == "sent"
 

@@ -77,7 +77,8 @@ export function unwrapList<T>(payload: ListResponse<T> | null | undefined): T[] 
 
 /**
  * 解包统一响应 `{code, message, data}`。
- * 迁移期兼容尚未包装的裸响应：没有 code/data 字段时原样返回。
+ * 服务端（server-ui）所有 JSON 接口均为该结构；client-ui 访问 agent 本地
+ * 接口时仍返回裸 JSON，因此缺少 code/data 时原样返回。
  */
 function unwrapEnvelope(payload: unknown): unknown {
   if (!payload || typeof payload !== 'object') return payload

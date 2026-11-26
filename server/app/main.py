@@ -12,8 +12,8 @@ from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.admin import router as admin_router
+from app.api.client import router as client_router
 from app.api.error_handlers import register_exception_handlers
-from app.api_client import router as client_router
 from app.db import init_db, init_engine
 from app.logstore import configure_logging, log_event, reset_request_id, set_request_id
 from app.settings import Settings, get_settings
