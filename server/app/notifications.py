@@ -22,9 +22,12 @@ from app.logstore import _sanitize, _truncate
 from app.models import Client, ClientEvent, Heartbeat, Incident, Notification, Setting
 from app.notifiers.base import NotificationMessage, Notifier, SendResult
 from app.notifiers.factory import build_notifiers, target_for
+from app.state_machine import FlappingInfo, flapping_info
 
 SETTING_KEY = "notifications"
 SYSTEM_CLIENT_ID = "system"
+FLAPPING_SUMMARY_KEY = "flapping_summary"
+KIND_FLAPPING = "flapping"
 MASK_PREFIX = "****"
 MAX_RETRY_ATTEMPTS = 3
 RETRY_BASE_SECONDS = 60
@@ -552,6 +555,41 @@ def build_message(
     raise ValueError(f"未知通知类型：{kind}")
 
 
+def build_flapping_message(
+    incident: Incident,
+    info: FlappingInfo,
+    client: Client | None,
+    channel: str,
+) -> NotificationMessage:
+    """抖动汇总：说明窗口内的恢复次数与抑制策略。"""
+    name = _client_name(client, incident)
+    guard_name = incident.guard_name or incident.guard_id or ""
+    lines = [f"客户端：{name}（{incident.client_id}）"]
+    if guard_name:
+        lines.append(f"守护项：{guard_name}")
+    lines.extend(
+        [
+            f"统计窗口：最近 {max(1, info.window_seconds // 60)} 分钟",
+            f"恢复次数：{info.count} 次（阈值 {info.threshold} 次）",
+            f"最近故障：{_fmt_time(info.latest_down_at)}",
+            f"最近恢复：{_fmt_time(info.latest_recovered_at)}",
+            "处理方式：窗口内单次告警已抑制，待状态稳定后恢复逐条通知",
+        ]
+    )
+    title = (
+        f"[Vigil] 抖动汇总：{name} / {guard_name}"
+        if guard_name
+        else f"[Vigil] 抖动汇总：{name}"
+    )
+    return NotificationMessage(
+        title=title,
+        body="\n".join(lines),
+        level="warn",
+        incident_id=None,
+        metadata={"kind": KIND_FLAPPING, "channel": channel},
+    )
+
+
 # --------------------------------------------------------------------------
 # 发送与重试
 # --------------------------------------------------------------------------
@@ -641,14 +679,107 @@ def pending_recovery_incidents(
     )
 
 
+def _flapping_scope(client_id: str, guard_id: str | None) -> str:
+    return f"{client_id}:{guard_id or '-'}"
+
+
+def _load_flapping_summary_state(db: Session) -> dict[str, str]:
+    row = db.get(Setting, FLAPPING_SUMMARY_KEY)
+    if row is None or not (row.value or "").strip():
+        return {}
+    try:
+        data = json.loads(row.value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def _summary_sent_recently(
+    scope: str, state: dict[str, str], now: datetime, window_seconds: int
+) -> bool:
+    raw = state.get(scope)
+    if not raw:
+        return False
+    try:
+        last_sent = datetime.fromisoformat(raw)
+    except ValueError:
+        return False
+    return (now - last_sent).total_seconds() < window_seconds
+
+
+def _mark_flapping_summary(db: Session, scope: str, now: datetime) -> None:
+    state = _load_flapping_summary_state(db)
+    state[scope] = now.isoformat()
+    row = db.get(Setting, FLAPPING_SUMMARY_KEY)
+    if row is None:
+        row = Setting(key=FLAPPING_SUMMARY_KEY, value="", updated_at=utcnow())
+        db.add(row)
+    row.value = json.dumps(state, ensure_ascii=False)
+    row.updated_at = utcnow()
+
+
+def _send_flapping_summary(
+    db: Session,
+    incident: Incident,
+    info: FlappingInfo,
+    now: datetime,
+    resolved: dict[str, Any],
+    notifiers: list[Notifier],
+) -> list[Notification]:
+    """每个作用域在每个窗口内只发一条汇总，状态持久化到 Setting 以免重启重复。"""
+    scope = _flapping_scope(incident.client_id, incident.guard_id)
+    if _summary_sent_recently(
+        scope, _load_flapping_summary_state(db), now, info.window_seconds
+    ):
+        return []
+
+    client = db.scalars(
+        select(Client).where(Client.client_id == incident.client_id)
+    ).one_or_none()
+    records: list[Notification] = []
+    for notifier in notifiers:
+        record = Notification(
+            incident_id=None,
+            client_id=incident.client_id,
+            channel=notifier.channel,
+            target=target_for(notifier.channel, resolved),
+            kind=KIND_FLAPPING,
+            status="pending",
+            attempts=0,
+            created_at=now,
+        )
+        result = _safe_send(
+            notifier, build_flapping_message(incident, info, client, notifier.channel)
+        )
+        record.attempts = 1
+        if result.ok:
+            record.status = "sent"
+            record.sent_at = now
+        else:
+            record.status = "failed"
+            record.last_error = result.error[:500]
+            record.next_attempt_at = now + timedelta(seconds=RETRY_BASE_SECONDS)
+        db.add(record)
+        records.append(record)
+
+    _mark_flapping_summary(db, scope, now)
+    db.flush()
+    return records
+
+
 def send_incident(
     db: Session,
     incident: Incident,
     kind: str,
     now: datetime,
     config: dict[str, Any] | None = None,
+    *,
+    flapping_window_seconds: int = 1800,
+    flapping_threshold: int = 3,
 ) -> list[Notification]:
-    """按渠道发送 DOWN / RECOVERY 通知并写记录；不满足条件时返回空列表。"""
+    """按渠道发送 DOWN / RECOVERY 通知并写记录；抖动期只发一条汇总。"""
     if kind == "down":
         if incident.state != "DOWN" or incident.notified_at is not None:
             return []
@@ -668,11 +799,41 @@ def send_incident(
     if not notifiers:
         return []
 
+    flapping = flapping_info(
+        db,
+        incident.client_id,
+        incident.guard_id,
+        now,
+        flapping_window_seconds,
+        flapping_threshold,
+    )
+    if flapping.is_flapping:
+        records: list[Notification] = []
+        # 恢复通知落 skipped 记录，避免窗口结束后补发过期的「已恢复」
+        if kind == "recovery":
+            for notifier in notifiers:
+                record = Notification(
+                    incident_id=incident.id,
+                    client_id=incident.client_id,
+                    channel=notifier.channel,
+                    target=target_for(notifier.channel, resolved),
+                    kind=kind,
+                    status="skipped",
+                    attempts=0,
+                    created_at=now,
+                )
+                record.last_error = "flapping_suppressed"
+                db.add(record)
+                records.append(record)
+        _send_flapping_summary(db, incident, flapping, now, resolved, notifiers)
+        db.flush()
+        return records
+
     client = db.scalars(
         select(Client).where(Client.client_id == incident.client_id)
     ).one_or_none()
     context = _message_context(db, incident, client)
-    records: list[Notification] = []
+    records = []
     rate_limited = _rate_limited(
         db, incident.client_id, now, int(resolved.get("rate_limit_per_hour", 10))
     )

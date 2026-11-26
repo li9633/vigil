@@ -18,6 +18,7 @@ from app.state_machine import (
     SignalSnapshot,
     SilenceState,
     evaluate,
+    flapping_info,
     is_flapping,
     recover_incidents,
     scan_guards,
@@ -300,6 +301,55 @@ def test_recovery_marks_flapping(db_ready: None) -> None:
         ).first()
         assert latest is not None
         assert "flapping" in latest.summary
+
+
+def test_flapping_info_scopes_and_window(db_ready: None) -> None:
+    now = utcnow()
+    with session_scope() as db:
+        for index in range(3):
+            offset = index * 10
+            db.add(
+                Incident(
+                    client_id="cl_scope",
+                    category="agent_down",
+                    state="RECOVERED",
+                    started_at=now - timedelta(minutes=30 - offset),
+                    detected_at=now - timedelta(minutes=29 - offset),
+                    recovered_at=now - timedelta(minutes=25 - offset),
+                    summary="历史故障",
+                    evidence_json="{}",
+                )
+            )
+        db.add(
+            Incident(
+                client_id="cl_scope",
+                guard_id=GUARD_ID,
+                guard_name="断网自动尝试恢复",
+                category=CATEGORY_GUARD_FAILED,
+                state="RECOVERED",
+                started_at=now - timedelta(minutes=10),
+                detected_at=now - timedelta(minutes=9),
+                recovered_at=now - timedelta(minutes=5),
+                summary="守护项恢复",
+                evidence_json="{}",
+            )
+        )
+
+    with session_scope() as db:
+        client_info = flapping_info(db, "cl_scope", None, now)
+        assert client_info.is_flapping is True
+        assert client_info.count == 3
+        assert client_info.latest_down_at == now - timedelta(minutes=10)
+        assert client_info.latest_recovered_at == now - timedelta(minutes=5)
+
+        # 守护项作用域与客户端级互不影响
+        guard_info = flapping_info(db, "cl_scope", GUARD_ID, now)
+        assert guard_info.count == 1
+        assert guard_info.is_flapping is False
+
+        # 窗口外的恢复不计入
+        later = now + timedelta(hours=2)
+        assert flapping_info(db, "cl_scope", None, later).count == 0
 
 
 def test_guard_failed_creates_single_incident(db_ready: None) -> None:

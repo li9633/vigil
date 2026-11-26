@@ -136,6 +136,7 @@ const KIND_LABELS: Record<string, string> = {
   down: '离线',
   recovery: '恢复',
   test: '测试',
+  flapping: '抖动汇总',
 }
 
 const STATUS_LABELS: Record<string, string> = {

@@ -517,6 +517,106 @@ def _seed_guard_incident(*, recovered: bool = False) -> int:
         return incident.id
 
 
+def test_flapping_suppresses_and_sends_single_summary(
+    db_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder = RecordingNotifier()
+    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    now = utcnow()
+
+    with session_scope() as db:
+        db.add(
+            Client(
+                client_id="cl_flap",
+                name="抖动路由器",
+                secret_sha256="0" * 64,
+                last_seen=now,
+                last_beacon=now,
+            )
+        )
+        for index in range(2):
+            offset = index * 10
+            db.add(
+                Incident(
+                    client_id="cl_flap",
+                    category="agent_down",
+                    state="RECOVERED",
+                    started_at=now - timedelta(minutes=20 + offset),
+                    detected_at=now - timedelta(minutes=19 + offset),
+                    recovered_at=now - timedelta(minutes=15 + offset),
+                    notified_at=now - timedelta(minutes=15 + offset),
+                    summary="历史故障",
+                    evidence_json="{}",
+                )
+            )
+        current = Incident(
+            client_id="cl_flap",
+            category="agent_down",
+            state="RECOVERED",
+            started_at=now - timedelta(minutes=5),
+            detected_at=now - timedelta(minutes=4),
+            recovered_at=now,
+            notified_at=now - timedelta(minutes=5),
+            summary="当前故障恢复",
+            evidence_json="{}",
+        )
+        db.add(current)
+        db.flush()
+        current_id = current.id
+
+    # 窗口内第 3 次恢复：抑制单次恢复通知，改发一条汇总
+    with session_scope() as db:
+        records = send_incident(db, db.get(Incident, current_id), "recovery", now, CONFIG)
+        assert [record.status for record in records] == ["skipped"]
+        assert records[0].last_error == "flapping_suppressed"
+
+    assert len(recorder.messages) == 1
+    summary = recorder.messages[0]
+    assert "抖动汇总" in summary.title
+    assert "抖动路由器" in summary.body
+    assert "恢复次数：3 次" in summary.body
+    assert "最近故障" in summary.body
+
+    with session_scope() as db:
+        stored = db.scalars(
+            select(Notification).where(Notification.kind == "flapping")
+        ).all()
+        assert len(stored) == 1
+        assert stored[0].status == "sent"
+
+    # 同一窗口内新增故障：仍处抖动期，不再重复发汇总
+    with session_scope() as db:
+        down = Incident(
+            client_id="cl_flap",
+            category="agent_down",
+            state="DOWN",
+            started_at=now - timedelta(minutes=1),
+            detected_at=now - timedelta(minutes=1),
+            summary="再次掉线",
+            evidence_json="{}",
+        )
+        db.add(down)
+        db.flush()
+        down_id = down.id
+
+    with session_scope() as db:
+        assert (
+            send_incident(
+                db, db.get(Incident, down_id), "down", now + timedelta(minutes=1), CONFIG
+            )
+            == []
+        )
+    assert len(recorder.messages) == 1
+
+    with session_scope() as db:
+        summaries = db.scalar(
+            select(func.count())
+            .select_from(Notification)
+            .where(Notification.kind == "flapping")
+        )
+        assert summaries == 1
+
+
 def test_guard_down_notification_lists_failed_checks(
     db_ready: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:

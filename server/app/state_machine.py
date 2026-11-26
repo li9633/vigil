@@ -58,6 +58,21 @@ class Evaluation:
         return self.state in (SilenceState.AGENT_DOWN, SilenceState.HOST_OR_NET_DOWN)
 
 
+@dataclass(frozen=True)
+class FlappingInfo:
+    """窗口内同一作用域（客户端或守护项）的恢复次数统计。"""
+
+    count: int
+    window_seconds: int
+    threshold: int
+    latest_down_at: datetime | None = None
+    latest_recovered_at: datetime | None = None
+
+    @property
+    def is_flapping(self) -> bool:
+        return self.count >= self.threshold
+
+
 def _age_seconds(now: datetime, ts: datetime | None) -> float | None:
     if ts is None:
         return None
@@ -99,6 +114,47 @@ def is_flapping(
     since = now - timedelta(seconds=window_seconds)
     count = sum(1 for ts in recovered_times if ts is not None and ts >= since)
     return count >= threshold
+
+
+def flapping_info(
+    db: Session,
+    client_id: str,
+    guard_id: str | None,
+    now: datetime,
+    window_seconds: int = 1800,
+    threshold: int = 3,
+) -> FlappingInfo:
+    """统计作用域内窗口期的恢复次数；guard_id 为空表示客户端级告警。"""
+    since = now - timedelta(seconds=window_seconds)
+    stmt = select(Incident).where(
+        Incident.client_id == client_id,
+        Incident.recovered_at.is_not(None),
+        Incident.recovered_at >= since,
+        Incident.recovered_at <= now,
+    )
+    if guard_id:
+        stmt = stmt.where(
+            Incident.guard_id == guard_id,
+            Incident.category == CATEGORY_GUARD_FAILED,
+        )
+    else:
+        stmt = stmt.where(
+            Incident.guard_id.is_(None),
+            Incident.category.in_(SILENCE_CATEGORIES),
+        )
+    rows = list(db.scalars(stmt).all())
+    latest_down_at = max((row.started_at for row in rows), default=None)
+    latest_recovered_at = max(
+        (row.recovered_at for row in rows if row.recovered_at is not None),
+        default=None,
+    )
+    return FlappingInfo(
+        count=len(rows),
+        window_seconds=window_seconds,
+        threshold=threshold,
+        latest_down_at=latest_down_at,
+        latest_recovered_at=latest_recovered_at,
+    )
 
 
 def incident_state_for(evaluation: Evaluation) -> str:

@@ -63,7 +63,13 @@ def run_forever(settings: Settings) -> None:
                     except Exception:
                         logger.exception("磁盘水位检查失败")
                     last_disk_check = time.monotonic()
-                _dispatch_notifications(db, touched, now)
+                _dispatch_notifications(
+                    db,
+                    touched,
+                    now,
+                    flapping_window_seconds=settings.flapping_window_seconds,
+                    flapping_threshold=settings.flapping_threshold,
+                )
                 if touched:
                     logger.debug(
                         "扫描完成：更新 %d 个 incident，清理 %d 条过期 nonce",
@@ -75,7 +81,14 @@ def run_forever(settings: Settings) -> None:
         time.sleep(settings.worker_interval_seconds)
 
 
-def _dispatch_notifications(db, touched, now) -> None:
+def _dispatch_notifications(
+    db,
+    touched,
+    now,
+    *,
+    flapping_window_seconds: int = 1800,
+    flapping_threshold: int = 3,
+) -> None:
     """发送 DOWN / RECOVERY 通知并重试失败记录；任何异常都不影响 worker 主循环。"""
     try:
         config = load_config(db)
@@ -87,7 +100,15 @@ def _dispatch_notifications(db, touched, now) -> None:
             else:
                 continue
             try:
-                records = send_incident(db, incident, kind, now, config)
+                records = send_incident(
+                    db,
+                    incident,
+                    kind,
+                    now,
+                    config,
+                    flapping_window_seconds=flapping_window_seconds,
+                    flapping_threshold=flapping_threshold,
+                )
                 for record in records:
                     if record.status == "sent":
                         log_event(
@@ -122,7 +143,15 @@ def _dispatch_notifications(db, touched, now) -> None:
                 )
         for incident in pending_recovery_incidents(db, now - timedelta(hours=24)):
             try:
-                send_incident(db, incident, "recovery", now, config)
+                send_incident(
+                    db,
+                    incident,
+                    "recovery",
+                    now,
+                    config,
+                    flapping_window_seconds=flapping_window_seconds,
+                    flapping_threshold=flapping_threshold,
+                )
             except Exception:
                 logger.exception("恢复通知发送失败：incident=%s", incident.id)
                 log_event(
