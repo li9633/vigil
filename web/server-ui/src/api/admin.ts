@@ -1,4 +1,4 @@
-import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type Client, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
+import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type AuditQuery, type AuditResponse, type Client, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type PolicyResponse, type PolicySettings, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
 
 export interface IncidentQuery {
   state?: string
@@ -59,6 +59,25 @@ export const adminApi = {
 
   logs: (query: ServerLogQuery = {}) =>
     api.get<ListResponse<ServerLogEntry>>('/api/v1/admin/logs', { query: { ...query } }),
+
+  audit: (query: AuditQuery = {}) =>
+    api.get<AuditResponse>('/api/v1/admin/audit', { query: { ...query } }),
+
+  policies: () => api.get<PolicyResponse>('/api/v1/admin/policies'),
+
+  savePolicies: (policies: Partial<PolicySettings>) =>
+    api.put<PolicyResponse>('/api/v1/admin/policies', policies),
+
+  auditExportUrl: (query: AuditQuery = {}) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value))
+      }
+    }
+    const suffix = params.toString()
+    return `${getApiConfig().baseURL}/api/v1/admin/audit/export${suffix ? `?${suffix}` : ''}`
+  },
 
   logsExportUrl: (query: ServerLogQuery = {}) => {
     const params = new URLSearchParams()

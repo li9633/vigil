@@ -555,6 +555,52 @@ export interface ServerLogQuery {
   since?: number
 }
 
+/** 服务端审计日志（GET /api/v1/admin/audit） */
+export interface AuditRecord {
+  id: number
+  actor: string
+  action: string
+  target: string
+  ts: string
+  detail: string
+}
+
+export interface AuditQuery {
+  actor?: string
+  action?: string
+  target?: string
+  since?: number
+  until?: number
+  limit?: number
+  offset?: number
+}
+
+export interface AuditResponse {
+  items: AuditRecord[]
+  total: number
+}
+
+/** 运行时策略配置（GET/PUT /api/v1/admin/policies） */
+export interface PolicySettings {
+  heartbeat_interval: number
+  suspect_seconds: number
+  down_seconds: number
+  beacon_seconds: number
+  flapping_window_seconds: number
+  flapping_threshold: number
+  actions_enabled: boolean
+  action_cooldown_seconds: number
+  action_max_per_hour: number
+  retention_days: number
+  disk_alert_percent: number
+  disk_alert_cooldown_seconds: number
+}
+
+export interface PolicyResponse {
+  policies: PolicySettings
+  defaults: PolicySettings
+}
+
 /** 客户端本地设置 */
 export interface ClientSettings {
   server_base_url?: string | null

@@ -27,8 +27,8 @@ const groups: NavGroup[] = [
     title: '配置',
     items: [
       { to: '/notifications', label: '通知配置', milestone: 'M2' },
-      { to: '/settings', label: '策略配置', milestone: 'M3' },
-      { to: '/audit', label: '审计日志', milestone: 'M3' },
+      { to: '/settings', label: '策略配置' },
+      { to: '/audit', label: '审计日志' },
     ],
   },
   {

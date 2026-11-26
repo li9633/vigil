@@ -15,6 +15,7 @@ from app.notifications import (
     retry_failed,
     send_incident,
 )
+from app.policies import effective_settings
 from app.retention import purge_expired
 from app.security import purge_expired_nonces
 from app.settings import Settings, get_settings
@@ -31,34 +32,38 @@ def run_forever(settings: Settings) -> None:
         try:
             with session_scope() as db:
                 now = utcnow()
+                effective = effective_settings(db, settings)
                 touched = scan_once(
                     db,
                     now,
-                    settings.thresholds,
-                    flapping_window_seconds=settings.flapping_window_seconds,
-                    flapping_threshold=settings.flapping_threshold,
+                    effective.thresholds,
+                    flapping_window_seconds=effective.flapping_window_seconds,
+                    flapping_threshold=effective.flapping_threshold,
                 )
                 touched.extend(scan_guards(db, now))
                 purged = purge_expired_nonces(db, now, settings.nonce_ttl_seconds)
                 if time.monotonic() - last_purge >= 3600:
-                    removed = purge_expired(db, now, settings.retention_days)
+                    removed = purge_expired(db, now, effective.retention_days)
                     last_purge = time.monotonic()
                     if sum(removed.values()):
                         log_event(
                             "info",
                             "retention.purge",
                             "清理过期明细数据",
-                            retention_days=settings.retention_days,
+                            retention_days=effective.retention_days,
                             **removed,
                         )
-                if time.monotonic() - last_disk_check >= settings.disk_check_interval_seconds:
+                if (
+                    time.monotonic() - last_disk_check
+                    >= effective.disk_check_interval_seconds
+                ):
                     try:
                         check_disk(
                             db,
                             now,
                             disk_path(settings.database_url),
-                            settings.disk_alert_percent,
-                            settings.disk_alert_cooldown_seconds,
+                            effective.disk_alert_percent,
+                            effective.disk_alert_cooldown_seconds,
                         )
                     except Exception:
                         logger.exception("磁盘水位检查失败")
@@ -67,8 +72,8 @@ def run_forever(settings: Settings) -> None:
                     db,
                     touched,
                     now,
-                    flapping_window_seconds=settings.flapping_window_seconds,
-                    flapping_threshold=settings.flapping_threshold,
+                    flapping_window_seconds=effective.flapping_window_seconds,
+                    flapping_threshold=effective.flapping_threshold,
                 )
                 if touched:
                     logger.debug(

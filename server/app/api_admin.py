@@ -7,11 +7,11 @@ import json
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_session, utcnow
@@ -35,9 +35,16 @@ from app.notifications import (
 )
 from app.notifiers.base import SendResult
 from app.notifiers.factory import build_notifiers, target_for
+from app.policies import (
+    default_policies,
+    effective_settings,
+    load_policies,
+    save_policies,
+)
 from app.schemas import LoginRequest, NotificationTestRequest, iso_utc
 from app.security import constant_time_equals
 from app.settings import Settings, settings_from_app
+from app.state_machine import CATEGORY_AGENT_DOWN, CATEGORY_HOST_OR_NET_DOWN
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -286,6 +293,18 @@ def login(
     blocked, first_failure = _login_blocked(client_key, now)
     if blocked:
         retry_after = max(1, int(LOGIN_WINDOW_SECONDS - (now - first_failure)))
+        db.add(
+            AuditLog(
+                actor=payload.username,
+                action="login_blocked",
+                target="admin",
+                ts=utcnow(),
+                detail=json.dumps(
+                    {"ip": client_key, "retry_after": retry_after}, ensure_ascii=False
+                ),
+            )
+        )
+        db.commit()
         log_event(
             "warn",
             "auth.login.blocked",
@@ -304,6 +323,16 @@ def login(
     )
     if not valid:
         _record_login_failure(client_key, now)
+        db.add(
+            AuditLog(
+                actor=payload.username,
+                action="login_fail",
+                target="admin",
+                ts=utcnow(),
+                detail=json.dumps({"ip": client_key}, ensure_ascii=False),
+            )
+        )
+        db.commit()
         log_event(
             "warn",
             "auth.login.fail",
@@ -339,7 +368,8 @@ def overview(
     _actor: str = Depends(require_admin),
 ) -> dict[str, Any]:
     now = utcnow()
-    online_since = now - timedelta(seconds=settings.suspect_seconds)
+    effective = effective_settings(db, settings)
+    online_since = now - timedelta(seconds=effective.suspect_seconds)
     clients_total = db.scalar(select(func.count()).select_from(Client)) or 0
     clients_online = (
         db.scalar(
@@ -377,6 +407,20 @@ def overview(
         }
         for incident in timeline_rows
     ]
+    flapping_since = now - timedelta(seconds=effective.flapping_window_seconds)
+    flapping_rows = db.execute(
+        select(Incident.client_id, func.count())
+        .where(
+            Incident.recovered_at.is_not(None),
+            Incident.recovered_at >= flapping_since,
+            Incident.guard_id.is_(None),
+            Incident.category.in_((CATEGORY_AGENT_DOWN, CATEGORY_HOST_OR_NET_DOWN)),
+        )
+        .group_by(Incident.client_id)
+    ).all()
+    flapping_clients = sum(
+        1 for _, count in flapping_rows if count >= effective.flapping_threshold
+    )
     return {
         "clients_total": clients_total,
         "clients_online": clients_online,
@@ -384,7 +428,7 @@ def overview(
         "incidents_open": incidents_open,
         "open_incidents": incidents_open,
         "incidents_24h": incidents_24h,
-        "flapping_clients": 0,
+        "flapping_clients": flapping_clients,
         "notification_success_rate": None,
         "timeline": timeline,
         "generated_at": iso_utc(now),
@@ -401,9 +445,10 @@ def list_clients(
     now = utcnow()
     clients = db.scalars(select(Client).order_by(Client.created_at.desc())).all()
     latest = _latest_incident_map(db, [client.client_id for client in clients])
+    effective = effective_settings(db, settings)
     return {
         "items": [
-            _serialize_client(client, settings, now, latest.get(client.client_id))
+            _serialize_client(client, effective, now, latest.get(client.client_id))
             for client in clients
         ]
     }
@@ -421,6 +466,7 @@ def get_client_detail(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="客户端不存在")
 
     now = utcnow()
+    effective = effective_settings(db, settings)
     heartbeats = db.scalars(
         select(Heartbeat)
         .where(Heartbeat.client_id == client_id)
@@ -440,7 +486,7 @@ def get_client_detail(
         .limit(100)
     ).all()
     return {
-        "client": _serialize_client(client, settings, now, _latest_incident_map(db, [client_id]).get(client_id)),
+        "client": _serialize_client(client, effective, now, _latest_incident_map(db, [client_id]).get(client_id)),
         "modules": _modules_from_heartbeat(heartbeats[0] if heartbeats else None),
         "guards": _guards_from_heartbeat(heartbeats[0] if heartbeats else None),
         "heartbeats": [_serialize_heartbeat(hb) for hb in heartbeats],
@@ -859,6 +905,145 @@ def clear_client_guards(
         removed=len(removed),
     )
     return {"items": [], "managed": False}
+
+
+# --------------------------------------------------------------------------
+# 运行时策略配置
+# --------------------------------------------------------------------------
+
+
+@router.get("/policies")
+def get_policies(
+    db: Session = Depends(get_session),
+    settings: Settings = Depends(settings_from_app),
+    _actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    return {
+        "policies": load_policies(db, settings),
+        "defaults": default_policies(settings),
+    }
+
+
+@router.put("/policies")
+def update_policies(
+    payload: dict[str, Any] = Body(...),
+    db: Session = Depends(get_session),
+    settings: Settings = Depends(settings_from_app),
+    actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    try:
+        policies = save_policies(db, payload, settings)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+    db.add(
+        AuditLog(
+            actor=actor,
+            action="update_policies",
+            target="policies",
+            ts=utcnow(),
+            detail=json.dumps(policies, ensure_ascii=False),
+        )
+    )
+    db.commit()
+    log_event("info", "policies.update", "运行时策略已更新", actor=actor, policies=policies)
+    return {
+        "policies": policies,
+        "defaults": default_policies(settings),
+    }
+
+
+# --------------------------------------------------------------------------
+# 审计日志：查询与导出
+# --------------------------------------------------------------------------
+
+AUDIT_EXPORT_LIMIT = 5000
+
+
+def _epoch_utc(value: float) -> datetime:
+    return datetime.fromtimestamp(value, tz=UTC).replace(tzinfo=None)
+
+
+def _audit_stmt(
+    actor: str | None,
+    action: str | None,
+    target: str | None,
+    since: float | None,
+    until: float | None,
+) -> Select[tuple[AuditLog]]:
+    stmt = select(AuditLog)
+    if actor:
+        stmt = stmt.where(AuditLog.actor.contains(actor.strip()))
+    if action:
+        stmt = stmt.where(AuditLog.action.contains(action.strip()))
+    if target:
+        stmt = stmt.where(AuditLog.target.contains(target.strip()))
+    if since is not None:
+        stmt = stmt.where(AuditLog.ts >= _epoch_utc(since))
+    if until is not None:
+        stmt = stmt.where(AuditLog.ts <= _epoch_utc(until))
+    return stmt
+
+
+def _serialize_audit(record: AuditLog) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "actor": record.actor,
+        "action": record.action,
+        "target": record.target,
+        "ts": iso_utc(record.ts),
+        "detail": record.detail,
+    }
+
+
+@router.get("/audit")
+def list_audit_logs(
+    actor: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    target: str | None = Query(default=None),
+    since: float | None = Query(default=None),
+    until: float | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_session),
+    _actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    """审计日志查询：登录、配置变更、手动操作。"""
+    stmt = _audit_stmt(actor, action, target, since, until)
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = db.scalars(
+        stmt.order_by(AuditLog.ts.desc(), AuditLog.id.desc()).offset(offset).limit(limit)
+    ).all()
+    return {"items": [_serialize_audit(record) for record in rows], "total": total}
+
+
+@router.get("/audit/export")
+def export_audit_logs(
+    actor: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    target: str | None = Query(default=None),
+    since: float | None = Query(default=None),
+    until: float | None = Query(default=None),
+    db: Session = Depends(get_session),
+    _actor: str = Depends(require_admin),
+) -> Response:
+    """按过滤条件导出审计日志为 JSONL。"""
+    rows = db.scalars(
+        _audit_stmt(actor, action, target, since, until)
+        .order_by(AuditLog.ts.asc(), AuditLog.id.asc())
+        .limit(AUDIT_EXPORT_LIMIT)
+    ).all()
+    lines = [json.dumps(_serialize_audit(record), ensure_ascii=False) for record in rows]
+    content = "\n".join(lines)
+    if content:
+        content += "\n"
+    filename = "vigil-audit-%s.jsonl" % time.strftime("%Y%m%d-%H%M%S")
+    return Response(
+        content=content,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % filename},
+    )
 
 
 @router.get("/logs")

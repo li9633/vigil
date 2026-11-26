@@ -58,6 +58,8 @@ class Settings:
     nonce_ttl_seconds: int = 900
     worker_interval_seconds: int = 10
     actions_enabled: bool = True
+    action_cooldown_seconds: int = 300
+    action_max_per_hour: int = 3
     flapping_window_seconds: int = 1800
     flapping_threshold: int = 3
     session_max_age: int = field(default=12 * 3600)
@@ -88,6 +90,12 @@ class Settings:
             nonce_ttl_seconds=_env_int("VIGIL_NONCE_TTL_SECONDS", cls.nonce_ttl_seconds),
             worker_interval_seconds=_env_int("VIGIL_WORKER_INTERVAL", cls.worker_interval_seconds),
             actions_enabled=_env_bool("VIGIL_ACTIONS_ENABLED", cls.actions_enabled),
+            action_cooldown_seconds=_env_int(
+                "VIGIL_ACTION_COOLDOWN_SECONDS", cls.action_cooldown_seconds
+            ),
+            action_max_per_hour=_env_int(
+                "VIGIL_ACTION_MAX_PER_HOUR", cls.action_max_per_hour
+            ),
             flapping_window_seconds=_env_int(
                 "VIGIL_FLAPPING_WINDOW_SECONDS", cls.flapping_window_seconds
             ),

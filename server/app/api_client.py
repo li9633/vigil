@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.db import get_session, utcnow
 from app.logstore import log_event
 from app.models import Beacon, Client, ClientEvent, GuardConfig, Heartbeat
+from app.policies import effective_settings
 from app.schemas import (
     BeaconRequest,
     BeaconResponse,
@@ -76,8 +77,8 @@ def build_policy(
         "actions_enabled": settings.actions_enabled,
         "action": {
             "max_level": "L1",
-            "cooldown_seconds": 300,
-            "max_per_hour": 3,
+            "cooldown_seconds": settings.action_cooldown_seconds,
+            "max_per_hour": settings.action_max_per_hour,
         },
         "config_poll_interval": 300,
     }
@@ -180,7 +181,7 @@ def register(
         client_id=client.client_id,
         secret=secret,
         server_time=int(time.time()),
-        heartbeat_interval=settings.heartbeat_interval,
+        heartbeat_interval=effective_settings(db, settings).heartbeat_interval,
     )
 
 
@@ -216,6 +217,7 @@ def heartbeat(
 ) -> HeartbeatResponse:
     _ensure_body_client(client, payload.client_id)
     now = utcnow()
+    effective = effective_settings(db, settings)
 
     previous_boot_id = client.boot_id
     silent_seconds = (
@@ -225,7 +227,7 @@ def heartbeat(
         previous_boot_id is not None
         and payload.boot_id != previous_boot_id
         and silent_seconds is not None
-        and silent_seconds > settings.suspect_seconds
+        and silent_seconds > effective.suspect_seconds
     )
 
     if reboot_detected:
@@ -264,15 +266,15 @@ def heartbeat(
         now,
         note="设备重启后恢复" if reboot_detected else "心跳恢复",
         evidence=evidence,
-        flapping_window_seconds=settings.flapping_window_seconds,
-        flapping_threshold=settings.flapping_threshold,
+        flapping_window_seconds=effective.flapping_window_seconds,
+        flapping_threshold=effective.flapping_threshold,
     )
     db.commit()
 
     return HeartbeatResponse(
         server_time=int(time.time()),
-        config_etag=policy_etag(settings, load_guard_configs(db, client.client_id)),
-        actions_enabled=settings.actions_enabled,
+        config_etag=policy_etag(effective, load_guard_configs(db, client.client_id)),
+        actions_enabled=effective.actions_enabled,
     )
 
 
@@ -321,8 +323,9 @@ def get_config(
     client: Client = Depends(require_client),
 ) -> Response:
     guards = load_guard_configs(db, client.client_id)
-    policy = build_policy(settings, guards)
-    etag = policy_etag(settings, guards)
+    effective = effective_settings(db, settings)
+    policy = build_policy(effective, guards)
+    etag = policy_etag(effective, guards)
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
     return JSONResponse(content=policy, headers={"ETag": etag})
