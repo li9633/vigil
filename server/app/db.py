@@ -76,6 +76,11 @@ def init_db() -> None:
             connection.execute(
                 text("ALTER TABLE heartbeats ADD COLUMN probes_json TEXT DEFAULT '[]'")
             )
+        if "modules_json" in columns:
+            # V2 不再使用 modules；旧列是 NOT NULL，必须移除否则新插入会失败
+            connection.execute(
+                text("ALTER TABLE heartbeats DROP COLUMN modules_json")
+            )
 
         client_columns = {
             item["name"] for item in inspect(connection).get_columns("clients")
