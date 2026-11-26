@@ -7,14 +7,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import secrets
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import Setting
+from app.repositories import setting_repo
 
 SETTING_KEY = "admin_auth"
 ALGORITHM = "pbkdf2_sha256"
@@ -56,28 +55,14 @@ def verify_password(password: str, record: dict[str, Any]) -> bool:
 
 
 def load_admin_auth(db: Session) -> dict[str, Any] | None:
-    row = db.get(Setting, SETTING_KEY)
-    if row is None or not (row.value or "").strip():
-        return None
-    try:
-        record = json.loads(row.value)
-    except json.JSONDecodeError:
-        return None
-    return record if isinstance(record, dict) else None
+    return setting_repo.get_json(db, SETTING_KEY)
 
 
 def set_admin_password(db: Session, password: str) -> dict[str, Any]:
     """写入新的 PBKDF2 记录并落库（调用方负责提交）。"""
     record = hash_password(password)
     record["updated_at"] = utcnow().isoformat() + "Z"
-
-    row = db.get(Setting, SETTING_KEY)
-    if row is None:
-        row = Setting(key=SETTING_KEY, value="", updated_at=utcnow())
-        db.add(row)
-    row.value = json.dumps(record, ensure_ascii=False)
-    row.updated_at = utcnow()
-    db.flush()
+    setting_repo.set_json(db, SETTING_KEY, record)
     return record
 
 

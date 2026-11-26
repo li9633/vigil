@@ -120,3 +120,48 @@ class ClientDetailResponse(BaseModel):
 
 class IncidentListResponse(BaseModel):
     items: list[IncidentItem]
+
+
+class GuardListResponse(BaseModel):
+    items: list[dict[str, Any]]
+    managed: bool
+
+
+class PolicyResponse(BaseModel):
+    policies: dict[str, Any]
+    defaults: dict[str, Any]
+
+
+class SystemSettingsResponse(BaseModel):
+    admin_username: str
+    password_source: str
+    password_updated_at: str | None = None
+    retention_days: int
+    disk_alert_percent: int
+    disk_alert_cooldown_seconds: int
+
+
+class AdminPasswordUpdateResponse(BaseModel):
+    ok: bool = True
+    password_source: str
+    password_updated_at: str | None = None
+
+
+class RotateSecretResponse(BaseModel):
+    client_id: str
+    secret: str
+    rotated_at: str | None
+
+
+class AuditItem(BaseModel):
+    id: int
+    actor: str
+    action: str
+    target: str
+    ts: str | None
+    detail: str | None
+
+
+class AuditListResponse(BaseModel):
+    items: list[AuditItem]
+    total: int

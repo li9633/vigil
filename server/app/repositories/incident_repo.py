@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 from app.models import Incident
 
 
+def get(db: Session, incident_id: int) -> Incident | None:
+    return db.get(Incident, incident_id)
+
+
 def latest_by_client(db: Session, client_ids: list[str]) -> dict[str, Incident]:
     """批量取每个客户端最近一条 incident。"""
     if not client_ids:

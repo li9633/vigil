@@ -86,7 +86,7 @@ def test_guards_crud_and_delivery(
     # 初始：无服务端配置，config 响应保持旧结构
     initial = client.get(_guards_url(client_id))
     assert initial.status_code == 200
-    assert initial.json() == {"items": [], "managed": False}
+    assert initial.json()["data"] == {"items": [], "managed": False}
 
     legacy = _get_config(client, auth, registered)
     assert legacy.status_code == 200
@@ -97,7 +97,7 @@ def test_guards_crud_and_delivery(
     payload = {"guards": [_guard(GUARD_A_ID), _guard(GUARD_B_ID, "DNS 异常恢复")]}
     saved = client.put(_guards_url(client_id), json=payload)
     assert saved.status_code == 200, saved.text
-    body = saved.json()
+    body = saved.json()["data"]
     assert body["managed"] is True
     assert [item["id"] for item in body["items"]] == [GUARD_B_ID, GUARD_A_ID]
     assert body["items"][1]["checks"][0]["probe"] == "carrier"
@@ -141,7 +141,7 @@ def test_guards_crud_and_delivery(
         _guards_url(client_id), json={"guards": [_guard(GUARD_A_ID, "断网恢复 v2")]}
     )
     assert replaced.status_code == 200
-    replaced_body = replaced.json()
+    replaced_body = replaced.json()["data"]
     assert [item["id"] for item in replaced_body["items"]] == [GUARD_A_ID]
     assert replaced_body["items"][0]["name"] == "断网恢复 v2"
 
@@ -178,8 +178,8 @@ def test_guards_delete_restores_legacy_config(
 
     cleared = client.delete(_guards_url(client_id))
     assert cleared.status_code == 200
-    assert cleared.json() == {"items": [], "managed": False}
-    assert client.get(_guards_url(client_id)).json() == {
+    assert cleared.json()["data"] == {"items": [], "managed": False}
+    assert client.get(_guards_url(client_id)).json()["data"] == {
         "items": [],
         "managed": False,
     }
@@ -274,7 +274,7 @@ def test_guards_invalid_payloads(
     assert client.put(_guards_url(client_id), json=[]).status_code == 422
 
     # 非法请求不应写入任何记录
-    assert client.get(_guards_url(client_id)).json() == {
+    assert client.get(_guards_url(client_id)).json()["data"] == {
         "items": [],
         "managed": False,
     }

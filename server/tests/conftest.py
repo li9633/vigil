@@ -23,7 +23,7 @@ ADMIN_PASSWORD = "test-pass"
 @pytest.fixture(autouse=True)
 def _reset_login_limiter():
     """每个用例重置管理员登录限流，避免相互影响。"""
-    from app.api_admin import reset_login_limiter
+    from app.services.auth_service import reset_login_limiter
 
     reset_login_limiter()
     yield

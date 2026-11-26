@@ -12,8 +12,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.db import utcnow
-from app.models import Setting
+from app.repositories import setting_repo
 from app.settings import Settings
 
 SETTING_KEY = "policies"
@@ -96,11 +95,11 @@ def validate_policies(policies: dict[str, Any]) -> None:
 
 
 def _load_raw(db: Session) -> Any:
-    row = db.get(Setting, SETTING_KEY)
-    if row is None or not (row.value or "").strip():
+    raw = setting_repo.get_raw(db, SETTING_KEY)
+    if raw is None or not raw.strip():
         return None
     try:
-        return json.loads(row.value)
+        return json.loads(raw)
     except json.JSONDecodeError:
         return None
 
@@ -120,14 +119,7 @@ def save_policies(
     """部分更新：未提供的字段沿用当前值，校验通过后整体落库。"""
     current = _merge_known(payload, load_policies(db, settings))
     validate_policies(current)
-
-    row = db.get(Setting, SETTING_KEY)
-    if row is None:
-        row = Setting(key=SETTING_KEY, value="", updated_at=utcnow())
-        db.add(row)
-    row.value = json.dumps(current, ensure_ascii=False)
-    row.updated_at = utcnow()
-    db.flush()
+    setting_repo.set_json(db, SETTING_KEY, current)
     return current
 
 

@@ -22,7 +22,7 @@ def test_login_is_logged(client: TestClient) -> None:
     _login(client)
     response = client.get("/api/v1/admin/logs", params={"event": "auth.", "limit": 20})
     assert response.status_code == 200
-    items = response.json()
+    items = response.json()["data"]
     assert items
     success = [item for item in items if item["event"] == "auth.login.success"]
     assert success
@@ -36,7 +36,7 @@ def test_register_is_logged(client: TestClient, registered: dict) -> None:
     _login(client)
     response = client.get("/api/v1/admin/logs", params={"event": "client.register"})
     assert response.status_code == 200
-    items = response.json()
+    items = response.json()["data"]
     assert items
     assert items[-1]["client_id"] == registered["client_id"]
 

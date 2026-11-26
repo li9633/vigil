@@ -6,9 +6,10 @@ import json
 from datetime import datetime
 from typing import Any
 
-from app.models import Client, ClientEvent, Heartbeat, Incident, Notification
+from app.models import AuditLog, Client, ClientEvent, Heartbeat, Incident, Notification
 from app.schemas import iso_utc
 from app.schemas.admin import (
+    AuditItem,
     ClientSummary,
     EventItem,
     GuardStatusItem,
@@ -70,6 +71,17 @@ def incident_item(incident: Incident) -> IncidentItem:
         notified_at=iso_utc(incident.notified_at),
         summary=incident.summary,
         evidence=evidence if isinstance(evidence, dict) else {},
+    )
+
+
+def audit_item(record: AuditLog) -> AuditItem:
+    return AuditItem(
+        id=record.id,
+        actor=record.actor,
+        action=record.action,
+        target=record.target,
+        ts=iso_utc(record.ts),
+        detail=record.detail,
     )
 
 

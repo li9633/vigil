@@ -43,7 +43,7 @@ def test_admin_login_rejects_wrong_password(client: TestClient) -> None:
 
 
 def test_admin_login_rate_limited(client: TestClient) -> None:
-    from app.api_admin import LOGIN_MAX_FAILURES
+    from app.services.auth_service import LOGIN_MAX_FAILURES
 
     for _ in range(LOGIN_MAX_FAILURES):
         assert _login(client, password="wrong").status_code == 401
@@ -56,7 +56,7 @@ def test_admin_login_rate_limited(client: TestClient) -> None:
 
 
 def test_admin_login_success_resets_limiter(client: TestClient) -> None:
-    from app.api_admin import LOGIN_MAX_FAILURES
+    from app.services.auth_service import LOGIN_MAX_FAILURES
 
     for _ in range(LOGIN_MAX_FAILURES - 1):
         assert _login(client, password="wrong").status_code == 401
@@ -150,7 +150,7 @@ def test_admin_client_detail_and_ack(
 
     ack = client.post(f"/api/v1/admin/incidents/{incident_id}/ack")
     assert ack.status_code == 200
-    assert ack.json()["acked_at"] is not None
+    assert ack.json()["data"]["acked_at"] is not None
 
     with session_scope() as db:
         actions = db.scalars(select(AuditLog.action)).all()
@@ -162,14 +162,14 @@ def test_admin_policies_update_and_audit(client: TestClient) -> None:
 
     initial = client.get("/api/v1/admin/policies")
     assert initial.status_code == 200
-    assert initial.json()["policies"]["flapping_threshold"] == 3
+    assert initial.json()["data"]["policies"]["flapping_threshold"] == 3
 
     updated = client.put(
         "/api/v1/admin/policies",
         json={"flapping_threshold": 4, "retention_days": 30},
     )
     assert updated.status_code == 200
-    policies = updated.json()["policies"]
+    policies = updated.json()["data"]["policies"]
     assert policies["flapping_threshold"] == 4
     assert policies["retention_days"] == 30
     assert policies["down_seconds"] == 150
@@ -213,7 +213,7 @@ def test_admin_policies_apply_to_client_config(
 
 
 def test_admin_login_failure_and_rate_limit_are_audited(client: TestClient) -> None:
-    from app.api_admin import LOGIN_MAX_FAILURES
+    from app.services.auth_service import LOGIN_MAX_FAILURES
 
     for _ in range(LOGIN_MAX_FAILURES):
         assert _login(client, password="wrong").status_code == 401
@@ -238,14 +238,14 @@ def test_admin_audit_list_filter_and_export(
         f"/api/v1/admin/clients/{registered['client_id']}/guards"
     ).status_code == 200
 
-    data = client.get("/api/v1/admin/audit").json()
+    data = client.get("/api/v1/admin/audit").json()["data"]
     actions = [item["action"] for item in data["items"]]
     assert data["total"] >= 2
     assert "login" in actions
     assert "guards_clear" in actions
     assert data["items"][0]["ts"].endswith("Z")
 
-    filtered = client.get("/api/v1/admin/audit", params={"action": "login"}).json()
+    filtered = client.get("/api/v1/admin/audit", params={"action": "login"}).json()["data"]
     assert filtered["total"] == 1
     assert [item["action"] for item in filtered["items"]] == ["login"]
 
@@ -280,9 +280,9 @@ def test_admin_stream_once_returns_ready_frame(client: TestClient) -> None:
 
 
 def test_stream_snapshot_tracks_incident_changes(client: TestClient) -> None:
-    from app.api_admin import _stream_snapshot
+    from app.services.stream_service import snapshot
 
-    before = _stream_snapshot()
+    before = snapshot()
     with session_scope() as db:
         incident = Incident(
             client_id="demo-client",
@@ -296,7 +296,7 @@ def test_stream_snapshot_tracks_incident_changes(client: TestClient) -> None:
         db.flush()
         incident_id = incident.id
 
-    after_insert = _stream_snapshot()
+    after_insert = snapshot()
     assert after_insert["incidents"][0] == before["incidents"][0] + 1
     assert after_insert["incidents"][1] == incident_id
 
@@ -305,7 +305,7 @@ def test_stream_snapshot_tracks_incident_changes(client: TestClient) -> None:
         assert row is not None
         row.acked_at = utcnow()
 
-    after_ack = _stream_snapshot()
+    after_ack = snapshot()
     assert after_ack["incidents"] != after_insert["incidents"]
 
 
@@ -324,13 +324,13 @@ class _FakeRequest:
 def test_admin_event_stream_emits_update_and_stops(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from app import api_admin
+    from app.api.admin import stream as stream_module
 
-    monkeypatch.setattr(api_admin, "STREAM_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(stream_module, "STREAM_INTERVAL_SECONDS", 0)
 
     async def run() -> tuple[list[str], str]:
         request = _FakeRequest(disconnect_after=1)
-        stream = api_admin._admin_event_stream(request, once=False)
+        stream = stream_module._admin_event_stream(request, once=False)
         first = await stream.__anext__()
         ready = await stream.__anext__()
 
@@ -360,7 +360,7 @@ def test_admin_event_stream_emits_update_and_stops(
 
 def test_admin_system_settings(client: TestClient) -> None:
     assert _login(client).status_code == 200
-    data = client.get("/api/v1/admin/system").json()
+    data = client.get("/api/v1/admin/system").json()["data"]
     assert data["admin_username"] == "admin"
     assert data["password_source"] == "env"
     assert data["password_updated_at"] is None
@@ -388,10 +388,10 @@ def test_admin_password_change_overrides_env(client: TestClient) -> None:
         json={"current_password": "test-pass", "new_password": "new-pass-123"},
     )
     assert changed.status_code == 200
-    assert changed.json()["password_source"] == "database"
-    assert changed.json()["password_updated_at"]
+    assert changed.json()["data"]["password_source"] == "database"
+    assert changed.json()["data"]["password_updated_at"]
 
-    system = client.get("/api/v1/admin/system").json()
+    system = client.get("/api/v1/admin/system").json()["data"]
     assert system["password_source"] == "database"
 
     # 数据库覆盖后，环境变量密码失效，新密码可登录
@@ -400,7 +400,7 @@ def test_admin_password_change_overrides_env(client: TestClient) -> None:
 
     audit = client.get(
         "/api/v1/admin/audit", params={"action": "update_admin_password"}
-    ).json()
+    ).json()["data"]
     assert audit["total"] == 1
 
 
@@ -415,7 +415,7 @@ def test_rotate_client_secret(
 
     rotated = client.post(f"/api/v1/admin/clients/{client_id}/secret/rotate")
     assert rotated.status_code == 200
-    data = rotated.json()
+    data = rotated.json()["data"]
     new_secret = data["secret"]
     assert new_secret and new_secret != old_secret
     assert data["rotated_at"].endswith("Z")
@@ -433,5 +433,5 @@ def test_rotate_client_secret(
     assert client.post("/api/v1/admin/clients/cl_missing/secret/rotate").status_code == 404
     audit = client.get(
         "/api/v1/admin/audit", params={"action": "rotate_client_secret"}
-    ).json()
+    ).json()["data"]
     assert audit["total"] == 1
