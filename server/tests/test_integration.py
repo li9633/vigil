@@ -77,7 +77,7 @@ def test_full_client_and_admin_flow(
     )
     assert login.status_code == 200
 
-    overview = client.get("/api/v1/admin/overview").json()
+    overview = client.get("/api/v1/admin/overview").json()["data"]
     assert overview["clients_total"] == 1
     assert overview["clients_online"] == 1
     assert overview["clients_down"] == 0
@@ -96,14 +96,14 @@ def test_full_client_and_admin_flow(
     assert timeline_item["type"] == "agent_down"
     assert timeline_item["severity"] == "DOWN"
 
-    clients = client.get("/api/v1/admin/clients").json()["items"]
+    clients = client.get("/api/v1/admin/clients").json()["data"]["items"]
     assert len(clients) == 1
     listed = clients[0]
     assert listed["client_id"] == client_id
     assert listed["state"] == "HEALTHY"
     assert listed["last_incident"]["client_id"] == client_id
 
-    detail = client.get(f"/api/v1/admin/clients/{client_id}").json()
+    detail = client.get(f"/api/v1/admin/clients/{client_id}").json()["data"]
     assert detail["client"]["client_id"] == client_id
     assert [module["id"] for module in detail["modules"]] == [
         "net.carrier",
@@ -114,7 +114,7 @@ def test_full_client_and_admin_flow(
     assert detail["actions"] == []
     assert detail["generated_at"]
 
-    incidents = client.get("/api/v1/admin/incidents").json()["items"]
+    incidents = client.get("/api/v1/admin/incidents").json()["data"]["items"]
     assert len(incidents) == 1
     assert incidents[0]["state"] == "DOWN"
     assert incidents[0]["client_id"] == client_id

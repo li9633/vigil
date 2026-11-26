@@ -90,12 +90,12 @@ def test_admin_login_overview_and_audit(
 
     response = client.get("/api/v1/admin/overview")
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert data["clients_total"] == 1
     assert data["clients_online"] == 0
     assert data["incidents_open"] == 0
 
-    clients = client.get("/api/v1/admin/clients").json()["items"]
+    clients = client.get("/api/v1/admin/clients").json()["data"]["items"]
     assert [item["client_id"] for item in clients] == [registered["client_id"]]
 
     with session_scope() as db:
@@ -139,12 +139,12 @@ def test_admin_client_detail_and_ack(
 
     detail = client.get(f"/api/v1/admin/clients/{registered['client_id']}")
     assert detail.status_code == 200
-    payload = detail.json()
+    payload = detail.json()["data"]
     assert payload["client"]["client_id"] == registered["client_id"]
     assert len(payload["heartbeats"]) == 1
     assert len(payload["incidents"]) == 1
 
-    incidents = client.get("/api/v1/admin/incidents").json()["items"]
+    incidents = client.get("/api/v1/admin/incidents").json()["data"]["items"]
     assert len(incidents) == 1
     incident_id = incidents[0]["id"]
 

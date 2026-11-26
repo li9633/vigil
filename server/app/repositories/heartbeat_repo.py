@@ -21,6 +21,17 @@ def latest(db: Session, client_id: str) -> Heartbeat | None:
     ).one_or_none()
 
 
+def list_for_client(db: Session, client_id: str, limit: int = 100) -> list[Heartbeat]:
+    return list(
+        db.scalars(
+            select(Heartbeat)
+            .where(Heartbeat.client_id == client_id)
+            .order_by(Heartbeat.received_at.desc())
+            .limit(limit)
+        ).all()
+    )
+
+
 def add(
     db: Session,
     *,

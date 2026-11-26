@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.api.admin import router as admin_read_router
 from app.api.error_handlers import register_exception_handlers
 from app.api_admin import router as admin_router
 from app.api_client import router as client_router
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(client_router)
     app.include_router(admin_router)
+    app.include_router(admin_read_router)
 
     @app.middleware("http")
     async def request_logging(request: Request, call_next):

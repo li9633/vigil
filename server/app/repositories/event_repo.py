@@ -23,6 +23,17 @@ def known_event_ids(db: Session, event_ids: list[str]) -> set[str]:
     )
 
 
+def list_for_client(db: Session, client_id: str, limit: int = 100) -> list[ClientEvent]:
+    return list(
+        db.scalars(
+            select(ClientEvent)
+            .where(ClientEvent.client_id == client_id)
+            .order_by(ClientEvent.received_at.desc())
+            .limit(limit)
+        ).all()
+    )
+
+
 def add(
     db: Session,
     *,
