@@ -193,11 +193,11 @@ export interface NotificationChannel {
   security?: EmailSecurity | string | null
 }
 
-/** down / recovery / test */
-export type NotificationKind = 'down' | 'recovery' | 'test'
+/** down / recovery / test / flapping / system */
+export type NotificationKind = 'down' | 'recovery' | 'test' | 'flapping' | 'system'
 
-/** pending / sent / failed / skipped */
-export type NotificationStatus = 'pending' | 'sent' | 'failed' | 'skipped'
+/** pending / sent / failed / skipped / dead */
+export type NotificationStatus = 'pending' | 'sent' | 'failed' | 'skipped' | 'dead'
 
 export interface NotificationRecord {
   id: number | string

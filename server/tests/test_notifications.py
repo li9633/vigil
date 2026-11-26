@@ -12,7 +12,12 @@ from sqlalchemy import func, select
 
 from app.db import session_scope, utcnow
 from app.models import AuditLog, Client, ClientEvent, Heartbeat, Incident, Notification
-from app.notifications import load_config, retry_failed, send_incident
+from app.notifications import (
+    load_config,
+    retry_failed,
+    send_incident,
+    send_system_alert,
+)
 from app.notifiers.base import NotificationMessage, Notifier, SendResult
 from app.notifiers.email import EmailNotifier
 from app.notifiers.feishu import FeishuNotifier
@@ -824,6 +829,103 @@ def test_retry_stops_after_three_attempts(
         record = db.scalars(select(Notification)).one()
         assert record.attempts == 3
     assert recorder.messages == []
+
+
+def test_retry_exhausted_moves_to_dead_and_alerts(
+    db_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incident_id = _seed_incident(notified_at=utcnow())
+    recorder = RecordingNotifier()
+    monkeypatch.setattr(
+        "app.notifications.build_notifiers",
+        lambda config: [FailingNotifier(), recorder],
+    )
+    now = utcnow()
+
+    with session_scope() as db:
+        db.add(
+            Notification(
+                incident_id=incident_id,
+                client_id="cl_notify",
+                channel="wecom",
+                target="qyapi.weixin.qq.com",
+                kind="down",
+                status="failed",
+                attempts=2,
+                last_error="HTTP 500",
+                next_attempt_at=now - timedelta(seconds=1),
+                created_at=now - timedelta(minutes=5),
+            )
+        )
+
+    with session_scope() as db:
+        retried = retry_failed(db, now, CONFIG)
+        assert len(retried) == 1
+        assert retried[0].attempts == 3
+        assert retried[0].status == "dead"
+        assert retried[0].next_attempt_at is None
+
+    # 死信提醒走未失败的飞书渠道，且不包含失败的企微
+    assert len(recorder.messages) == 1
+    alert = recorder.messages[0]
+    assert "死信" in alert.title
+    assert "企业微信 / down" in alert.body
+    assert "cl_notify" in alert.body
+
+    with session_scope() as db:
+        records = db.scalars(
+            select(Notification).where(Notification.kind == "system")
+        ).all()
+        assert len(records) == 1
+        assert records[0].status == "sent"
+        assert records[0].client_id == "system"
+
+
+def test_retry_marks_dead_when_channel_removed(
+    db_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incident_id = _seed_incident(notified_at=utcnow())
+    recorder = RecordingNotifier()
+    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    now = utcnow()
+
+    with session_scope() as db:
+        db.add(
+            Notification(
+                incident_id=incident_id,
+                client_id="cl_notify",
+                channel="wecom",
+                target="qyapi.weixin.qq.com",
+                kind="recovery",
+                status="failed",
+                attempts=1,
+                last_error="channel disabled",
+                next_attempt_at=now - timedelta(seconds=1),
+                created_at=now - timedelta(minutes=5),
+            )
+        )
+
+    with session_scope() as db:
+        retried = retry_failed(db, now, CONFIG)
+        assert [record.status for record in retried] == ["dead"]
+
+    assert len(recorder.messages) == 1
+    assert "死信" in recorder.messages[0].title
+
+
+def test_system_alert_failure_is_dead_letter(
+    db_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "app.notifications.build_notifiers", lambda config: [FailingNotifier()]
+    )
+    now = utcnow()
+
+    with session_scope() as db:
+        records = send_system_alert(db, now, "[Vigil] 数据盘空间不足", "使用率：91%")
+
+    assert [record.status for record in records] == ["dead"]
+    assert records[0].kind == "system"
 
 
 def test_worker_dispatches_recovery_without_touched(

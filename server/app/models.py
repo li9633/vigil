@@ -119,7 +119,7 @@ class Notification(Base):
     target: Mapped[str] = mapped_column(String(256), default="")
     # down / recovery / system / test
     kind: Mapped[str] = mapped_column(String(16), default="down")
-    # pending / sent / failed / skipped
+    # pending / sent / failed / skipped / dead（重试耗尽）
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

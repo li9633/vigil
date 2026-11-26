@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   EmptyState,
@@ -118,6 +118,9 @@ function toPayload(source: ConfigForm): NotificationSettings {
 
 const form = reactive<ConfigForm>(emptyForm())
 const records = ref<NotificationRecord[]>([])
+const deadCount = computed(
+  () => records.value.filter((record) => record.status === 'dead').length,
+)
 const loading = ref(false)
 const saving = ref(false)
 const recordsLoading = ref(false)
@@ -137,12 +140,14 @@ const KIND_LABELS: Record<string, string> = {
   recovery: '恢复',
   test: '测试',
   flapping: '抖动汇总',
+  system: '系统',
 }
 
 const STATUS_LABELS: Record<string, string> = {
   sent: '已发送',
   failed: '失败',
   skipped: '已跳过',
+  dead: '死信',
   pending: '待发送',
 }
 
@@ -163,7 +168,7 @@ function statusLabel(status: string | null | undefined): string {
 
 function statusTagType(status: string): 'success' | 'warning' | 'danger' | 'info' {
   if (status === 'sent') return 'success'
-  if (status === 'failed') return 'danger'
+  if (status === 'failed' || status === 'dead') return 'danger'
   if (status === 'skipped') return 'info'
   return 'warning'
 }
@@ -422,6 +427,15 @@ onMounted(load)
           <el-button size="small" text type="primary" @click="loadRecords">重试</el-button>
         </div>
       </el-alert>
+
+      <el-alert
+        v-if="deadCount"
+        class="table-error"
+        type="error"
+        show-icon
+        :closable="false"
+        :title="`有 ${deadCount} 条通知重试耗尽进入死信，请检查渠道配置与网络连通性`"
+      />
 
       <div class="panel-body panel-body--flush">
         <el-table v-loading="recordsLoading" :data="records" row-key="id">

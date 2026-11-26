@@ -18,7 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.logstore import _sanitize, _truncate
+from app.logstore import _sanitize, _truncate, log_event
 from app.models import Client, ClientEvent, Heartbeat, Incident, Notification, Setting
 from app.notifiers.base import NotificationMessage, Notifier, SendResult
 from app.notifiers.factory import build_notifiers, target_for
@@ -28,9 +28,12 @@ SETTING_KEY = "notifications"
 SYSTEM_CLIENT_ID = "system"
 FLAPPING_SUMMARY_KEY = "flapping_summary"
 KIND_FLAPPING = "flapping"
+KIND_SYSTEM = "system"
 MASK_PREFIX = "****"
 MAX_RETRY_ATTEMPTS = 3
 RETRY_BASE_SECONDS = 60
+DEAD_LETTER_KINDS = ("down", "recovery", "test")
+MAX_DEAD_ALERT_ITEMS = 10
 SECURITY_MODES = ("ssl", "starttls", "none")
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -640,7 +643,7 @@ def _recovery_already_sent(db: Session, incident: Incident) -> bool:
 
 
 def _has_pending_record(db: Session, incident: Incident, kind: str) -> bool:
-    """已有未完成的记录时不再重复新建：失败记录交给 retry_failed，skipped 记录避免每轮重复刷表。"""
+    """已有未完成的记录时不再重复新建：失败记录交给 retry_failed，skipped/dead 记录避免重复刷表。"""
     count = (
         db.scalar(
             select(func.count())
@@ -648,7 +651,7 @@ def _has_pending_record(db: Session, incident: Incident, kind: str) -> bool:
             .where(
                 Notification.incident_id == incident.id,
                 Notification.kind == kind,
-                Notification.status.in_(("pending", "failed", "skipped")),
+                Notification.status.in_(("pending", "failed", "skipped", "dead")),
             )
         )
         or 0
@@ -758,9 +761,9 @@ def _send_flapping_summary(
             record.status = "sent"
             record.sent_at = now
         else:
-            record.status = "failed"
+            # 系统/汇总通知不带 incident，无法重建消息重试，直接转入死信供排查
+            record.status = "dead"
             record.last_error = result.error[:500]
-            record.next_attempt_at = now + timedelta(seconds=RETRY_BASE_SECONDS)
         db.add(record)
         records.append(record)
 
@@ -921,9 +924,9 @@ def send_system_alert(
             record.status = "sent"
             record.sent_at = now
         else:
-            record.status = "failed"
+            # 系统/汇总通知不带 incident，无法重建消息重试，直接转入死信供排查
+            record.status = "dead"
             record.last_error = result.error[:500]
-            record.next_attempt_at = now + timedelta(seconds=RETRY_BASE_SECONDS)
         db.add(record)
         records.append(record)
 
@@ -931,12 +934,76 @@ def send_system_alert(
     return records
 
 
+def _notify_dead_letters(
+    db: Session,
+    now: datetime,
+    records: list[Notification],
+    resolved: dict[str, Any],
+) -> None:
+    """对转入死信的告警改用剩余渠道提醒管理员，避免渠道故障时静默丢失。"""
+    alerts = [record for record in records if record.kind in DEAD_LETTER_KINDS]
+    if not alerts:
+        return
+
+    failed_channels = sorted({record.channel for record in alerts})
+    log_event(
+        "error",
+        "notify.dead",
+        "通知重试耗尽转入死信",
+        count=len(alerts),
+        channels=failed_channels,
+    )
+    notifiers = [
+        notifier
+        for notifier in build_notifiers(resolved)
+        if notifier.channel not in failed_channels
+    ]
+    if not notifiers:
+        return
+
+    lines = [f"以下通知重试 {MAX_RETRY_ATTEMPTS} 次后仍失败，已转入死信："]
+    for record in alerts[:MAX_DEAD_ALERT_ITEMS]:
+        channel = CHANNEL_LABELS.get(record.channel, record.channel)
+        lines.append(
+            f"- {channel} / {record.kind} / 客户端 {record.client_id or '-'} / "
+            f"记录 {record.id}：{record.last_error or '-'}"
+        )
+    if len(alerts) > MAX_DEAD_ALERT_ITEMS:
+        lines.append(f"- 另有 {len(alerts) - MAX_DEAD_ALERT_ITEMS} 条未列出")
+    lines.append("请检查通知渠道配置与网络连通性，死信记录可在通知记录中查看。")
+
+    message = NotificationMessage(
+        title="[Vigil] 通知重试耗尽，已转入死信",
+        body="\n".join(lines),
+        level="critical",
+        incident_id=None,
+        metadata={"kind": KIND_SYSTEM},
+    )
+    for notifier in notifiers:
+        result = _safe_send(notifier, message)
+        db.add(
+            Notification(
+                incident_id=None,
+                client_id=SYSTEM_CLIENT_ID,
+                channel=notifier.channel,
+                target=target_for(notifier.channel, resolved),
+                kind=KIND_SYSTEM,
+                status="sent" if result.ok else "dead",
+                attempts=1,
+                last_error=None if result.ok else result.error[:500],
+                created_at=now,
+                sent_at=now if result.ok else None,
+            )
+        )
+    db.flush()
+
+
 def retry_failed(
     db: Session,
     now: datetime,
     config: dict[str, Any] | None = None,
 ) -> list[Notification]:
-    """重发失败记录，最多 3 次；单条异常不影响其他记录。"""
+    """重发失败记录，最多 3 次；耗尽后转入死信并提醒管理员。"""
     rows = list(
         db.scalars(
             select(Notification)
@@ -957,10 +1024,16 @@ def retry_failed(
     notifier_map = {notifier.channel: notifier for notifier in build_notifiers(resolved)}
     clients: dict[str, Client | None] = {}
     touched: list[Notification] = []
+    newly_dead: list[Notification] = []
 
     for record in rows:
         notifier = notifier_map.get(record.channel)
         if notifier is None:
+            # 渠道已被移除，无法继续重试
+            record.status = "dead"
+            record.next_attempt_at = None
+            newly_dead.append(record)
+            touched.append(record)
             continue
 
         if record.kind == "test":
@@ -969,6 +1042,11 @@ def retry_failed(
         else:
             incident = db.get(Incident, record.incident_id) if record.incident_id else None
             if incident is None:
+                # incident 不存在或记录类型无法重建消息，转入死信供排查
+                record.status = "dead"
+                record.next_attempt_at = None
+                newly_dead.append(record)
+                touched.append(record)
                 continue
             if record.client_id not in clients:
                 clients[record.client_id] = db.scalars(
@@ -996,16 +1074,21 @@ def retry_failed(
                 and incident.notified_at is None
             ):
                 incident.notified_at = now
+        elif record.attempts >= MAX_RETRY_ATTEMPTS:
+            record.status = "dead"
+            record.last_error = result.error[:500]
+            record.next_attempt_at = None
+            newly_dead.append(record)
         else:
             record.status = "failed"
             record.last_error = result.error[:500]
-            record.next_attempt_at = (
-                now + timedelta(seconds=RETRY_BASE_SECONDS * record.attempts)
-                if record.attempts < MAX_RETRY_ATTEMPTS
-                else None
+            record.next_attempt_at = now + timedelta(
+                seconds=RETRY_BASE_SECONDS * record.attempts
             )
         touched.append(record)
 
+    if newly_dead:
+        _notify_dead_letters(db, now, newly_dead, resolved)
     db.flush()
     return touched
 
