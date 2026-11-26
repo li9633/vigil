@@ -18,11 +18,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
-from app.models import Client, Incident, Notification, Setting
+from app.logstore import _sanitize, _truncate
+from app.models import Client, ClientEvent, Heartbeat, Incident, Notification, Setting
 from app.notifiers.base import NotificationMessage, Notifier, SendResult
 from app.notifiers.factory import build_notifiers, target_for
 
 SETTING_KEY = "notifications"
+SYSTEM_CLIENT_ID = "system"
 MASK_PREFIX = "****"
 MAX_RETRY_ATTEMPTS = 3
 RETRY_BASE_SECONDS = 60
@@ -275,12 +277,185 @@ def _client_name(client: Client | None, incident: Incident) -> str:
     return incident.client_id
 
 
+GUARD_BAD_STATUSES = ("warn", "critical", "unknown")
+MAX_ACTIONS = 10
+MAX_SNIPPET = 4096
+
+
+def _load_json(value: str | None) -> dict[str, Any]:
+    try:
+        data = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _latest_heartbeat(db: Session, client_id: str) -> Heartbeat | None:
+    stmt = (
+        select(Heartbeat)
+        .where(Heartbeat.client_id == client_id)
+        .order_by(Heartbeat.received_at.desc(), Heartbeat.id.desc())
+        .limit(1)
+    )
+    return db.scalars(stmt).first()
+
+
+def _baseline_heartbeat(db: Session, incident: Incident) -> Heartbeat | None:
+    """故障发生前最后一次心跳，用于对比 boot_id 与 WAN IP。"""
+    stmt = (
+        select(Heartbeat)
+        .where(
+            Heartbeat.client_id == incident.client_id,
+            Heartbeat.received_at <= incident.started_at,
+        )
+        .order_by(Heartbeat.received_at.desc(), Heartbeat.id.desc())
+        .limit(1)
+    )
+    return db.scalars(stmt).first()
+
+
+def _failed_checks(guard: dict[str, Any]) -> list[str]:
+    checks = guard.get("checks")
+    if not isinstance(checks, dict):
+        return []
+    failed: list[str] = []
+    for name, check in checks.items():
+        if not isinstance(check, dict):
+            continue
+        status = str(check.get("status") or "")
+        if status not in GUARD_BAD_STATUSES:
+            continue
+        label = f"{name}（{status}"
+        latency = check.get("latency_ms")
+        if isinstance(latency, int) and not isinstance(latency, bool):
+            label += f"，{latency}ms"
+        failed.append(label + "）")
+    return failed
+
+
+def _recent_actions(db: Session, incident: Incident) -> list[dict[str, Any]]:
+    """故障期间客户端上报的动作结果，用于恢复通知的动作链。"""
+    stmt = select(ClientEvent).where(
+        ClientEvent.client_id == incident.client_id,
+        ClientEvent.type == "action_result",
+        ClientEvent.received_at >= incident.started_at,
+    )
+    if incident.guard_id:
+        stmt = stmt.where(ClientEvent.domain == incident.guard_id)
+    rows = db.scalars(
+        stmt.order_by(ClientEvent.received_at.asc(), ClientEvent.id.asc()).limit(
+            MAX_ACTIONS
+        )
+    ).all()
+    actions: list[dict[str, Any]] = []
+    for row in rows:
+        payload = _load_json(row.payload_json)
+        actions.append(
+            {
+                "action": str(payload.get("action") or "-"),
+                "target": str(payload.get("target") or ""),
+                "result": str(payload.get("result") or ""),
+                "exit_code": payload.get("exit_code"),
+                "latency_ms": payload.get("latency_ms"),
+                "output": payload.get("output"),
+            }
+        )
+    return actions
+
+
+def _evidence_snippet(guard: dict[str, Any], actions: list[dict[str, Any]]) -> str:
+    parts: list[dict[str, Any]] = []
+    checks = guard.get("checks")
+    if isinstance(checks, dict):
+        for name, check in checks.items():
+            if isinstance(check, dict) and check.get("evidence"):
+                parts.append(
+                    {
+                        "check": name,
+                        "status": check.get("status"),
+                        "evidence": check.get("evidence"),
+                    }
+                )
+    for action in actions:
+        if action.get("output"):
+            parts.append({"action": action.get("action"), "output": action.get("output")})
+    if not parts:
+        return ""
+    return _truncate(
+        json.dumps(_sanitize(parts), ensure_ascii=False), MAX_SNIPPET
+    )
+
+
+def _message_context(
+    db: Session, incident: Incident, client: Client | None
+) -> dict[str, Any]:
+    """汇总通知所需的证据，避免 build_message 依赖数据库。"""
+    evidence = _load_json(incident.evidence_json)
+    raw_guard = evidence.get("guard")
+    guard: dict[str, Any] = raw_guard if isinstance(raw_guard, dict) else {}
+
+    latest_guard: dict[str, Any] = {}
+    if incident.guard_id:
+        latest = _latest_heartbeat(db, incident.client_id)
+        if latest is not None:
+            candidate = _load_json(latest.guards_json).get(incident.guard_id)
+            if isinstance(candidate, dict):
+                latest_guard = candidate
+
+    recovery_id = ""
+    for source in (latest_guard, guard):
+        value = str(source.get("last_recovery_id") or "")
+        if value:
+            recovery_id = value
+            break
+    if not recovery_id:
+        recovery_id = str(evidence.get("recovery_id") or "")
+
+    baseline = _baseline_heartbeat(db, incident)
+    start_boot = (baseline.boot_id if baseline else "") or ""
+    current_boot = (client.boot_id if client else None) or ""
+    start_wan = (baseline.wan_ip if baseline else None) or ""
+    current_wan = (client.wan_ip if client else None) or ""
+    actions = _recent_actions(db, incident)
+
+    return {
+        "guard": guard,
+        "failed_checks": _failed_checks(guard),
+        "actions": actions,
+        "recovery_id": recovery_id,
+        "recovered_by": str(evidence.get("recovered_by") or ""),
+        "boot_id_changed": bool(start_boot and current_boot and start_boot != current_boot),
+        "wan_ip_changed": bool(start_wan and current_wan and start_wan != current_wan),
+        "previous_wan_ip": start_wan,
+        "current_wan_ip": current_wan,
+        "snippet": _evidence_snippet(guard, actions),
+    }
+
+
+def _format_actions(actions: list[dict[str, Any]]) -> list[str]:
+    if not actions:
+        return ["动作链：无记录"]
+    lines = ["动作链："]
+    for index, action in enumerate(actions, 1):
+        detail = str(action.get("action") or "-")
+        if action.get("target"):
+            detail += f" → {action['target']}"
+        detail += f" {action.get('result') or '-'}"
+        if isinstance(action.get("exit_code"), int):
+            detail += f"（exit {action['exit_code']}）"
+        if isinstance(action.get("latency_ms"), int):
+            detail += f"，{action['latency_ms']}ms"
+        lines.append(f"  {index}. {detail}")
+    return lines
+
+
 def build_message(
     incident: Incident | None,
     kind: str,
     now: datetime,
     client: Client | None,
     channel: str,
+    context: dict[str, Any] | None = None,
 ) -> NotificationMessage:
     if kind == "test":
         return NotificationMessage(
@@ -293,13 +468,18 @@ def build_message(
     if incident is None:
         raise ValueError(f"通知类型 {kind} 缺少 incident")
 
+    ctx = context or {}
     name = _client_name(client, incident)
+    guard_name = incident.guard_name or incident.guard_id or ""
+
     if kind == "down":
         last_seen = client.last_seen if client else None
         missing = (now - last_seen).total_seconds() if last_seen else None
-        body = "\n".join(
+        lines = [f"客户端：{name}（{incident.client_id}）"]
+        if guard_name:
+            lines.append(f"守护项：{guard_name}")
+        lines.extend(
             [
-                f"客户端：{name}（{incident.client_id}）",
                 f"类别：{incident.category}",
                 f"首次异常：{_fmt_time(incident.started_at)}",
                 f"最后心跳：{_fmt_time(last_seen)}",
@@ -307,9 +487,18 @@ def build_message(
                 f"缺失时长：{_fmt_duration(missing)}",
             ]
         )
+        failed = ctx.get("failed_checks") or []
+        if failed:
+            lines.append("失败 Check：" + "、".join(failed))
+        lines.append("boot_id：" + ("已变化" if ctx.get("boot_id_changed") else "未变化"))
+        title = (
+            f"[Vigil] 守护项异常：{name} / {guard_name}"
+            if guard_name
+            else f"[Vigil] 客户端离线：{name}"
+        )
         return NotificationMessage(
-            title=f"[Vigil] 客户端离线：{name}",
-            body=body,
+            title=title,
+            body="\n".join(lines),
             level="critical",
             incident_id=incident.id,
             metadata={"kind": kind, "channel": channel},
@@ -319,19 +508,42 @@ def build_message(
         duration = None
         if incident.recovered_at is not None:
             duration = (incident.recovered_at - incident.started_at).total_seconds()
-        body = "\n".join(
+        lines = [f"客户端：{name}（{incident.client_id}）"]
+        if guard_name:
+            lines.append(f"守护项：{guard_name}")
+        lines.extend(
             [
-                f"客户端：{name}（{incident.client_id}）",
                 f"类别：{incident.category}",
                 f"故障开始：{_fmt_time(incident.started_at)}",
                 f"恢复时间：{_fmt_time(incident.recovered_at)}",
                 f"持续时长：{_fmt_duration(duration)}",
-                f"摘要：{incident.summary or '-'}",
             ]
         )
+        recovered_by = (
+            "服务端扫描" if ctx.get("recovered_by") == "server_scan" else "客户端心跳"
+        )
+        lines.append(f"恢复判定方：{recovered_by}")
+        lines.extend(_format_actions(ctx.get("actions") or []))
+        lines.append("是否重启：" + ("是" if ctx.get("boot_id_changed") else "否"))
+        if ctx.get("wan_ip_changed"):
+            lines.append(
+                f"WAN IP：{ctx.get('previous_wan_ip')} → {ctx.get('current_wan_ip')}（已变化）"
+            )
+        else:
+            lines.append(f"WAN IP：{ctx.get('current_wan_ip') or '-'}（未变化）")
+        lines.append(f"recovery_id：{ctx.get('recovery_id') or '-'}")
+        snippet = ctx.get("snippet") or ""
+        if snippet:
+            lines.append(f"证据摘要：{snippet}")
+        lines.append(f"摘要：{incident.summary or '-'}")
+        title = (
+            f"[Vigil] 已恢复：{name} / {guard_name}"
+            if guard_name
+            else f"[Vigil] 已恢复：{name}"
+        )
         return NotificationMessage(
-            title=f"[Vigil] 已恢复：{name}",
-            body=body,
+            title=title,
+            body="\n".join(lines),
             level="ok",
             incident_id=incident.id,
             metadata={"kind": kind, "channel": channel},
@@ -459,6 +671,7 @@ def send_incident(
     client = db.scalars(
         select(Client).where(Client.client_id == incident.client_id)
     ).one_or_none()
+    context = _message_context(db, incident, client)
     records: list[Notification] = []
     rate_limited = _rate_limited(
         db, incident.client_id, now, int(resolved.get("rate_limit_per_hour", 10))
@@ -481,7 +694,9 @@ def send_incident(
             records.append(record)
             continue
 
-        message = build_message(incident, kind, now, client, notifier.channel)
+        message = build_message(
+            incident, kind, now, client, notifier.channel, context=context
+        )
         result = _safe_send(notifier, message)
         record.attempts = 1
         if result.ok:
@@ -501,6 +716,57 @@ def send_incident(
         incident.notified_at = now
         db.flush()
 
+    return records
+
+
+def send_system_alert(
+    db: Session,
+    now: datetime,
+    title: str,
+    body: str,
+    *,
+    level: str = "critical",
+    config: dict[str, Any] | None = None,
+) -> list[Notification]:
+    """发送与具体客户端无关的系统级通知（如磁盘水位），并落库便于审计。"""
+    resolved = config if config is not None else load_config(db)
+    notifiers = build_notifiers(resolved)
+    if not notifiers:
+        return []
+
+    message = NotificationMessage(
+        title=title,
+        body=body,
+        level=level,
+        incident_id=None,
+        metadata={"kind": "system"},
+    )
+    records: list[Notification] = []
+    for notifier in notifiers:
+        record = Notification(
+            incident_id=None,
+            client_id=SYSTEM_CLIENT_ID,
+            channel=notifier.channel,
+            target=target_for(notifier.channel, resolved),
+            kind="system",
+            status="pending",
+            attempts=0,
+            created_at=now,
+        )
+
+        result = _safe_send(notifier, message)
+        record.attempts = 1
+        if result.ok:
+            record.status = "sent"
+            record.sent_at = now
+        else:
+            record.status = "failed"
+            record.last_error = result.error[:500]
+            record.next_attempt_at = now + timedelta(seconds=RETRY_BASE_SECONDS)
+        db.add(record)
+        records.append(record)
+
+    db.flush()
     return records
 
 
@@ -548,7 +814,12 @@ def retry_failed(
                     select(Client).where(Client.client_id == record.client_id)
                 ).one_or_none()
             message = build_message(
-                incident, record.kind, now, clients[record.client_id], record.channel
+                incident,
+                record.kind,
+                now,
+                clients[record.client_id],
+                record.channel,
+                context=_message_context(db, incident, clients[record.client_id]),
             )
 
         result = _safe_send(notifier, message)

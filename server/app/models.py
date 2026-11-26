@@ -117,7 +117,7 @@ class Notification(Base):
     client_id: Mapped[str] = mapped_column(String(64), index=True)
     channel: Mapped[str] = mapped_column(String(32))
     target: Mapped[str] = mapped_column(String(256), default="")
-    # down / recovery / test
+    # down / recovery / system / test
     kind: Mapped[str] = mapped_column(String(16), default="down")
     # pending / sent / failed / skipped
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)

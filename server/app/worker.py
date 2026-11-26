@@ -7,6 +7,7 @@ import time
 from datetime import timedelta
 
 from app.db import init_db, init_engine, session_scope, utcnow
+from app.diskguard import check_disk, disk_path
 from app.logstore import configure_logging, log_event
 from app.notifications import (
     load_config,
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 def run_forever(settings: Settings) -> None:
     """按配置间隔循环扫描，单次异常不中断进程。"""
     last_purge = 0.0
+    last_disk_check = 0.0
     while True:
         try:
             with session_scope() as db:
@@ -49,6 +51,18 @@ def run_forever(settings: Settings) -> None:
                             retention_days=settings.retention_days,
                             **removed,
                         )
+                if time.monotonic() - last_disk_check >= settings.disk_check_interval_seconds:
+                    try:
+                        check_disk(
+                            db,
+                            now,
+                            disk_path(settings.database_url),
+                            settings.disk_alert_percent,
+                            settings.disk_alert_cooldown_seconds,
+                        )
+                    except Exception:
+                        logger.exception("磁盘水位检查失败")
+                    last_disk_check = time.monotonic()
                 _dispatch_notifications(db, touched, now)
                 if touched:
                     logger.debug(

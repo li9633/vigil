@@ -743,6 +743,9 @@ class AgentApp:
                 "success_count": fsm_state["success_count"],
                 "recovery_rounds": fsm_state["recovery_rounds"],
                 "rearm_at": fsm_state["rearm_at"],
+                "last_recovery_id": str(
+                    self.guard_fsm.snapshot(guard_id).get("last_recovery_id", "")
+                ),
                 "checks": checks,
             }
             self._guard_last_run[guard_id] = now

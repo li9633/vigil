@@ -68,6 +68,9 @@ class Settings:
     log_backups: int = 5
     log_compress: bool = True
     retention_days: int = 30
+    disk_alert_percent: int = 85
+    disk_alert_cooldown_seconds: int = 6 * 3600
+    disk_check_interval_seconds: int = 300
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -95,6 +98,13 @@ class Settings:
             log_backups=_env_int("VIGIL_LOG_BACKUPS", cls.log_backups),
             log_compress=_env_bool("VIGIL_LOG_COMPRESS", cls.log_compress),
             retention_days=_env_int("VIGIL_RETENTION_DAYS", cls.retention_days),
+            disk_alert_percent=_env_int("VIGIL_DISK_ALERT_PERCENT", cls.disk_alert_percent),
+            disk_alert_cooldown_seconds=_env_int(
+                "VIGIL_DISK_ALERT_COOLDOWN_SECONDS", cls.disk_alert_cooldown_seconds
+            ),
+            disk_check_interval_seconds=_env_int(
+                "VIGIL_DISK_CHECK_INTERVAL_SECONDS", cls.disk_check_interval_seconds
+            ),
         )
 
     @property

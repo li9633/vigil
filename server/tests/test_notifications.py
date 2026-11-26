@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from typing import Any
 
@@ -10,7 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from app.db import session_scope, utcnow
-from app.models import AuditLog, Client, Incident, Notification
+from app.models import AuditLog, Client, ClientEvent, Heartbeat, Incident, Notification
 from app.notifications import load_config, retry_failed, send_incident
 from app.notifiers.base import NotificationMessage, Notifier, SendResult
 from app.notifiers.email import EmailNotifier
@@ -464,8 +465,135 @@ def test_recovery_requires_sent_down_and_sends_once(
     assert "持续时长" in recorder.messages[0].body
 
 
-def test_rate_limit_marks_skipped(
+GUARD_SNAPSHOT = {
+    "name": "外网连通性",
+    "status": "FAILED",
+    "check_status": "critical",
+    "failure_count": 3,
+    "checks": {
+        "net.carrier": {
+            "status": "critical",
+            "latency_ms": 12,
+            "evidence": {"reason": "carrier down", "token": "secret-token"},
+        },
+        "net.route": {"status": "ok", "latency_ms": 5, "evidence": {}},
+    },
+}
+
+
+def _seed_guard_incident(*, recovered: bool = False) -> int:
+    started = utcnow() - timedelta(minutes=3)
+    now = utcnow()
+    with session_scope() as db:
+        db.add(
+            Client(
+                client_id="cl_guard",
+                name="路由器 G",
+                secret_sha256="0" * 64,
+                last_seen=now,
+                last_beacon=now,
+                wan_ip="203.0.113.9",
+                boot_id="boot-new",
+            )
+        )
+        incident = Incident(
+            client_id="cl_guard",
+            guard_id="g-1",
+            guard_name="外网连通性",
+            category="guard_failed",
+            state="RECOVERED" if recovered else "DOWN",
+            started_at=started,
+            detected_at=started + timedelta(seconds=30),
+            recovered_at=now if recovered else None,
+            notified_at=now - timedelta(minutes=1) if recovered else None,
+            summary="守护项 外网连通性 状态 DOWN",
+            evidence_json=json.dumps(
+                {"guard": GUARD_SNAPSHOT, "heartbeat_seq": 7, "recovery_id": "rec-123"},
+                ensure_ascii=False,
+            ),
+        )
+        db.add(incident)
+        db.flush()
+        return incident.id
+
+
+def test_guard_down_notification_lists_failed_checks(
     db_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incident_id = _seed_guard_incident()
+    recorder = RecordingNotifier()
+    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+
+    with session_scope() as db:
+        send_incident(db, db.get(Incident, incident_id), "down", utcnow(), CONFIG)
+
+    message = recorder.messages[0]
+    assert "守护项异常" in message.title
+    assert "外网连通性" in message.title
+    assert "守护项：外网连通性" in message.body
+    assert "net.carrier（critical，12ms）" in message.body
+    assert "net.route" not in message.body
+    assert "boot_id：未变化" in message.body
+
+
+def test_recovery_notification_includes_actions_reboot_and_snippet(
+    db_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    incident_id = _seed_guard_incident(recovered=True)
+    recorder = RecordingNotifier()
+    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    now = utcnow()
+
+    with session_scope() as db:
+        incident = db.get(Incident, incident_id)
+        assert incident is not None
+        db.add(
+            Heartbeat(
+                client_id="cl_guard",
+                received_at=incident.started_at - timedelta(seconds=30),
+                seq=1,
+                uptime=10,
+                boot_id="boot-old",
+                wan_ip="198.51.100.1",
+            )
+        )
+        db.add(
+            ClientEvent(
+                client_id="cl_guard",
+                event_id="ev-action-1",
+                seq=1,
+                type="action_result",
+                domain="g-1",
+                payload_json=json.dumps(
+                    {
+                        "action": "ifup_wan",
+                        "target": "wan",
+                        "result": "ok",
+                        "exit_code": 0,
+                        "latency_ms": 1200,
+                        "output": "pppoe up",
+                    },
+                    ensure_ascii=False,
+                ),
+                received_at=now,
+            )
+        )
+
+    with session_scope() as db:
+        records = send_incident(db, db.get(Incident, incident_id), "recovery", now, CONFIG)
+        assert [record.status for record in records] == ["sent"]
+
+    body = recorder.messages[0].body
+    assert "恢复判定方：客户端心跳" in body
+    assert "1. ifup_wan → wan ok（exit 0），1200ms" in body
+    assert "是否重启：是" in body
+    assert "198.51.100.1 → 203.0.113.9（已变化）" in body
+    assert "recovery_id：rec-123" in body
+    assert "证据摘要" in body
+    assert "secret-token" not in body
+
+
+def test_rate_limit_marks_skipped(    db_ready: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     incident_id = _seed_incident()
     recorder = RecordingNotifier()
