@@ -71,7 +71,7 @@ export const adminApi = {
   system: () => api.get<AdminSystemSettings>('/api/v1/admin/system'),
 
   changeAdminPassword: (payload: { current_password: string; new_password: string }) =>
-    api.put<{ ok: boolean; password_source: string; password_updated_at: string | null }>(
+    api.put<{ ok: boolean; password_updated_at: string | null }>(
       '/api/v1/admin/system/admin-password',
       payload,
     ),

@@ -11,9 +11,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db import init_db, init_engine
+from app.db import init_db, init_engine, session_scope
 from app.main import create_app
 from app.settings import Settings
+from app.system_settings import load_pepper, set_admin_password
 
 BOOTSTRAP_TOKEN = "test-bootstrap"
 ADMIN_USERNAME = "admin"
@@ -36,7 +37,7 @@ def settings(tmp_path: Path) -> Settings:
         database_url=f"sqlite+pysqlite:///{db_path}",
         bootstrap_token=BOOTSTRAP_TOKEN,
         admin_username=ADMIN_USERNAME,
-        admin_password=ADMIN_PASSWORD,
+        admin_key_file=str(tmp_path / "admin.key"),
         session_secret="test-session-secret",
         log_dir=str(tmp_path / "logs"),
     )
@@ -51,6 +52,12 @@ def db_ready(settings: Settings) -> None:
 
 @pytest.fixture()
 def client(settings: Settings):
+    init_engine(settings.database_url)
+    init_db()
+    with session_scope() as db:
+        set_admin_password(
+            db, ADMIN_PASSWORD, load_pepper(settings.admin_key_file, create=True)
+        )
     with TestClient(create_app(settings)) as test_client:
         yield test_client
 

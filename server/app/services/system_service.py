@@ -21,6 +21,8 @@ from app.system_settings import (
     MAX_PASSWORD_LENGTH,
     MIN_PASSWORD_LENGTH,
     admin_auth_state,
+    load_pepper,
+    remove_initial_password,
     set_admin_password,
     verify_admin_password,
 )
@@ -28,10 +30,9 @@ from app.system_settings import (
 
 def get_system_settings(db: Session, settings: Settings) -> SystemSettingsResponse:
     effective = effective_settings(db, settings)
-    state = admin_auth_state(db)
+    state = admin_auth_state(db, settings.admin_key_file)
     return SystemSettingsResponse(
         admin_username=settings.admin_username,
-        password_source=str(state["source"]),
         password_updated_at=state["updated_at"],
         retention_days=effective.retention_days,
         disk_alert_percent=effective.disk_alert_percent,
@@ -47,7 +48,7 @@ def change_admin_password(
     current_password: str,
     new_password: str,
 ) -> AdminPasswordUpdateResponse:
-    if not verify_admin_password(db, settings.admin_password, current_password):
+    if not verify_admin_password(db, current_password, settings.admin_key_file):
         raise ValidationError("当前密码不正确")
     if not MIN_PASSWORD_LENGTH <= len(new_password) <= MAX_PASSWORD_LENGTH:
         raise ValidationError(
@@ -56,19 +57,21 @@ def change_admin_password(
     if current_password == new_password:
         raise ValidationError("新密码不能与当前密码相同")
 
-    record = set_admin_password(db, new_password)
+    record = set_admin_password(
+        db, new_password, load_pepper(settings.admin_key_file, create=True)
+    )
     audit_repo.add_audit(
         db,
         actor=actor,
         action="update_admin_password",
         target="admin",
-        detail={"source": "database"},
+        detail={},
     )
+    remove_initial_password(settings.admin_key_file)
     db.commit()
     log_event("warn", "auth.admin.password", "管理员密码已更新", actor=actor)
     updated_at = record.get("updated_at")
     return AdminPasswordUpdateResponse(
-        password_source="database",
         password_updated_at=str(updated_at) if updated_at else None,
     )
 

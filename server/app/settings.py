@@ -46,7 +46,7 @@ class Settings:
     database_url: str = "sqlite+pysqlite:///./vigil.db"
     bootstrap_token: str = "vigil-bootstrap-dev"
     admin_username: str = "admin"
-    admin_password: str = "vigil-dev"
+    admin_key_file: str = "/var/lib/vigil/admin.key"
     session_secret: str = "vigil-dev-session-secret-change-me"
 
     heartbeat_interval: int = 30
@@ -80,7 +80,7 @@ class Settings:
             database_url=_env_str("VIGIL_DATABASE_URL", cls.database_url),
             bootstrap_token=_env_str("VIGIL_BOOTSTRAP_TOKEN", cls.bootstrap_token),
             admin_username=_env_str("VIGIL_ADMIN_USERNAME", cls.admin_username),
-            admin_password=_env_str("VIGIL_ADMIN_PASSWORD", cls.admin_password),
+            admin_key_file=_env_str("VIGIL_ADMIN_KEY_FILE", cls.admin_key_file),
             session_secret=_env_str("VIGIL_SESSION_SECRET", cls.session_secret),
             heartbeat_interval=_env_int("VIGIL_HEARTBEAT_INTERVAL", cls.heartbeat_interval),
             suspect_seconds=_env_int("VIGIL_SUSPECT_SECONDS", cls.suspect_seconds),

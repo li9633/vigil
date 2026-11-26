@@ -362,13 +362,12 @@ def test_admin_system_settings(client: TestClient) -> None:
     assert _login(client).status_code == 200
     data = client.get("/api/v1/admin/system").json()["data"]
     assert data["admin_username"] == "admin"
-    assert data["password_source"] == "env"
-    assert data["password_updated_at"] is None
+    assert data["password_updated_at"]
     assert data["retention_days"] >= 0
     assert 50 <= data["disk_alert_percent"] <= 99
 
 
-def test_admin_password_change_overrides_env(client: TestClient) -> None:
+def test_admin_password_change_persists_to_database(client: TestClient) -> None:
     assert _login(client).status_code == 200
 
     wrong = client.put(
@@ -388,13 +387,12 @@ def test_admin_password_change_overrides_env(client: TestClient) -> None:
         json={"current_password": "test-pass", "new_password": "new-pass-123"},
     )
     assert changed.status_code == 200
-    assert changed.json()["data"]["password_source"] == "database"
     assert changed.json()["data"]["password_updated_at"]
 
     system = client.get("/api/v1/admin/system").json()["data"]
-    assert system["password_source"] == "database"
+    assert "password_source" not in system
 
-    # 数据库覆盖后，环境变量密码失效，新密码可登录
+    # 修改后旧密码失效，新密码可登录
     assert _login(client, password="test-pass").status_code == 401
     assert _login(client, password="new-pass-123").status_code == 200
 

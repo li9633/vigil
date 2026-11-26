@@ -14,9 +14,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.api.admin import router as admin_router
 from app.api.client import router as client_router
 from app.api.error_handlers import register_exception_handlers
-from app.db import init_db, init_engine
+from app.db import init_db, init_engine, session_scope
 from app.logstore import configure_logging, log_event, reset_request_id, set_request_id
 from app.settings import Settings, get_settings
+from app.system_settings import ensure_admin_auth
 
 ROUTINE_CLIENT_PATHS = {
     "/api/v1/heartbeat",
@@ -35,6 +36,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         configure_logging("api", resolved)
         init_db()
+        with session_scope() as db:
+            ensure_admin_auth(db, resolved)
         log_event("info", "app.start", "Vigil API 启动", version="0.1.0")
         yield
         log_event("info", "app.stop", "Vigil API 停止")

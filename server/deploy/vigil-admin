@@ -1,0 +1,21 @@
+#!/bin/sh
+# Vigil 管理员密码维护入口：sudo vigil-admin reset-password
+# 需要以 root 运行，内部切换到 vigil 用户，确保数据库与密钥文件属主正确。
+set -eu
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "请使用 root 运行：sudo vigil-admin $*" >&2
+    exit 1
+fi
+
+cd /opt/vigil
+
+if [ -f /etc/vigil/server.env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . /etc/vigil/server.env
+    set +a
+fi
+
+exec runuser -u vigil --preserve-environment -- \
+    /opt/vigil/venv/bin/python -m app.admin_cli "$@"

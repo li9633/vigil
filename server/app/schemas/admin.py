@@ -134,7 +134,6 @@ class PolicyResponse(BaseModel):
 
 class SystemSettingsResponse(BaseModel):
     admin_username: str
-    password_source: str
     password_updated_at: str | None = None
     retention_days: int
     disk_alert_percent: int
@@ -143,7 +142,6 @@ class SystemSettingsResponse(BaseModel):
 
 class AdminPasswordUpdateResponse(BaseModel):
     ok: bool = True
-    password_source: str
     password_updated_at: str | None = None
 
 

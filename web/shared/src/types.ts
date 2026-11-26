@@ -604,7 +604,6 @@ export interface PolicyResponse {
 /** 系统设置（GET /api/v1/admin/system） */
 export interface AdminSystemSettings {
   admin_username: string
-  password_source: 'env' | 'database'
   password_updated_at?: string | null
   retention_days: number
   disk_alert_percent: number

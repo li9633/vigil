@@ -129,7 +129,7 @@ def login_admin(
         raise LoginBlocked(retry_after)
 
     valid = constant_time_equals(username, settings.admin_username) and (
-        verify_admin_password(db, settings.admin_password, password)
+        verify_admin_password(db, password, settings.admin_key_file)
     )
     if not valid:
         login_throttle.record_failure(client_key, timestamp)

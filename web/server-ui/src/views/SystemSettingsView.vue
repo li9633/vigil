@@ -69,7 +69,6 @@ async function changePassword() {
       new_password: passwordForm.next,
     })
     if (system.value) {
-      system.value.password_source = 'database'
       system.value.password_updated_at = result.password_updated_at
     }
     passwordForm.current = ''
@@ -117,14 +116,12 @@ onMounted(load)
       <div class="panel-body">
         <h3 class="section-title">管理员账号</h3>
         <p class="section-sub">
-          用户名由环境变量固定；修改密码后将以数据库中的 PBKDF2 记录为准，环境变量仅作为初始值。
+          用户名由环境变量固定；密码以 PBKDF2 哈希保存在数据库中，修改时需验证当前密码。
+          首次启动的初始密码见服务器 /var/lib/vigil/initial_admin_password，修改后会删除。
         </p>
         <div class="meta-line">
           <span class="muted">用户名</span>
           <strong class="mono">{{ system?.admin_username || '—' }}</strong>
-          <el-tag size="small" :type="system?.password_source === 'database' ? 'success' : 'info'">
-            {{ system?.password_source === 'database' ? '数据库密码' : '环境变量密码' }}
-          </el-tag>
           <span v-if="system?.password_updated_at" class="muted">
             更新于 <TimeText :value="system.password_updated_at" mode="datetime" />
           </span>
