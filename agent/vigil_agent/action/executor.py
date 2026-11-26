@@ -17,8 +17,9 @@ import tempfile
 import threading
 import time
 
-from ..detect.base import CommandRunner, truncate
 from ..lockfile import FileLock
+from ..utils.proc import CommandRunner
+from ..utils.text import truncate
 
 ACTION_IFUP_WAN = "ifup_wan"
 ACTION_RESTART_SERVICE = "restart_service"
@@ -77,18 +78,15 @@ class ActionExecutor:
         action_cfg = config.get("action") or {}
         safety = config.get("action_safety") or {}
         storage = config.get("storage") or {}
-        detect_cfg = config.get("detect") or {}
 
         self.config = config
-        self.enabled = bool(safety.get("global_enabled", action_cfg.get("enabled", True)))
-        self.max_level = str(safety.get("max_risk_level", action_cfg.get("max_level", "L1")))
+        self.enabled = bool(safety.get("global_enabled", True))
+        self.max_level = str(safety.get("max_risk_level", "L1"))
         self.cooldown_seconds = int(action_cfg.get("cooldown_seconds", 300))
-        self.max_per_hour = int(
-            safety.get("max_actions_per_hour", action_cfg.get("max_per_hour", 3))
-        )
+        self.max_per_hour = int(safety.get("max_actions_per_hour", 3))
         self.allowed_services = list(action_cfg.get("allowed_services") or [])
         self.action_timeout = int(action_cfg.get("timeout", 30))
-        self.wan_interface = str(detect_cfg.get("wan_interface") or "wan")
+        self.wan_interface = str(action_cfg.get("wan_interface") or "wan")
 
         self.state_path = state_path or storage.get("state_path") or "/overlay/vigil/state.json"
         self.lock_path = lock_path or action_cfg.get("lock_path") or "/var/run/vigil/action.lock"
@@ -237,7 +235,7 @@ class ActionExecutor:
 
                 command_result = self.runner.run(command, timeout=self.action_timeout)
                 result["exit_code"] = command_result.exit_code
-                result["latency_ms"] = command_result.elapsed_ms
+                result["latency_ms"] = command_result.latency_ms
                 output = (command_result.stderr or command_result.stdout or "").strip()
                 if not output and command_result.error:
                     output = command_result.error

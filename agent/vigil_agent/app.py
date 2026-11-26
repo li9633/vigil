@@ -21,18 +21,20 @@ import uuid
 from . import __version__
 from .action.executor import ActionExecutor
 from .api import create_server
-from .config import DEFAULT_CONFIG_PATH, save_config
-from .detect.base import (
+from .checks.model import normalize_checks
+from .checks.runner import (
     STATUS_CRITICAL,
     STATUS_OK,
     STATUS_SKIPPED,
-    CommandRunner,
-    DetectContext,
-    DetectionEngine,
+    STATUS_UNKNOWN,
+    aggregate_status,
 )
-from .guards import GuardStateMachine, aggregate_status, run_checks
+from .config import DEFAULT_CONFIG_PATH, save_config
+from .guards import GuardStateMachine
+from .guards.model import normalize_guard
 from .guards.recovery import RecoveryRunner
 from .logstore import log_event, set_log_context
+from .probes.builtin import builtin_registry
 from .runtime import RuntimeState, Watchdog, prepare_storage
 from .scheduler import IntervalScheduler
 from .services import guard_service, uplink, views
@@ -58,8 +60,9 @@ class AgentApp:
         set_log_context(self.transport.client_id, self.transport.boot_id)
         self._log_throttle = {}
         self.executor = ActionExecutor(config)
-        self.engine = DetectionEngine()
-        self.guards = list(config.get("guards") or [])
+        self.registry = builtin_registry()
+        self.checks = normalize_checks(list(config.get("checks") or []), self.registry)
+        self.guards = [normalize_guard(item) for item in config.get("guards") or []]
         # guards 来源：local=本地编辑；server=服务端下发（本地只读）
         self.guards_source = "local"
         self._server_guards = None
@@ -69,8 +72,9 @@ class AgentApp:
         self.guard_fsm = GuardStateMachine(state_path=guards_state_path)
         self.scheduler = IntervalScheduler()
 
-        # 调度节拍取「旧检测间隔」与「各 Guard 间隔」的最小值；每一项再按自身间隔节流。
-        self.scheduler.add("detect", guard_service.detect_loop_interval(config, self.guards))
+        # 调度节拍取各 Guard 间隔的最小值；每个 Guard 再按自身间隔节流。
+        self.detect_interval = guard_service.detect_loop_interval(self.guards)
+        self.scheduler.add("detect", self.detect_interval)
         self.scheduler.add("heartbeat", int(config["server"]["heartbeat_interval"]))
         self.scheduler.add("config", int(config["server"]["config_poll_interval"]))
 
@@ -83,7 +87,6 @@ class AgentApp:
         self._etag = None
         self._server_config = {}
         self._next_register_at = 0.0
-        self._last_engine_at = 0.0
         self._guard_last_run = {}
 
     # ---------- 生命周期 ----------
@@ -94,7 +97,7 @@ class AgentApp:
 
     def run_forever(self):
         self._install_signal_handlers()
-        timeout = max(60, 2 * int(self.config["detect"]["interval"]))
+        timeout = max(60, 2 * int(self.detect_interval))
         self._watchdog = Watchdog(self.state, timeout)
         self._watchdog.start()
         self.state.touch()
@@ -103,7 +106,7 @@ class AgentApp:
             "agent.start",
             "vigil-agent 启动",
             version=self.state.agent_version,
-            detect_interval=int(self.config["detect"]["interval"]),
+            detect_interval=int(self.detect_interval),
             heartbeat_interval=int(self.config["server"]["heartbeat_interval"]),
         )
         try:
@@ -183,30 +186,28 @@ class AgentApp:
         with self._detect_lock:
             now = time.time()
             previous = self.state.snapshot_checks()
-            engine_interval = int(self.config["detect"]["interval"])
-            if now - self._last_engine_at >= engine_interval or not previous:
-                ctx = DetectContext(self.config, runner=CommandRunner())
-                results = self.engine.run(ctx)
-                self.state.set_checks(results)
-                self._last_engine_at = now
-            else:
-                # 调度节拍可能小于旧检测间隔（被某个 Guard 拉快），此处按原间隔节流
-                results = previous
-
             previous_guards = self.state.snapshot_guards()
+
             guard_results = self._evaluate_guards(now=now, previous=previous_guards)
             self.state.set_guards(guard_results)
+            results = self.state.snapshot_checks()
 
             if emit_events:
-                for layer, result in results.items():
-                    old_status = previous.get(layer, {}).get("status")
+                for check_id, result in results.items():
+                    old_status = previous.get(check_id, {}).get("status")
                     new_status = result["status"]
-                    if old_status != new_status and new_status in (STATUS_OK, STATUS_CRITICAL):
+                    if old_status != new_status and new_status in (
+                        STATUS_OK,
+                        STATUS_CRITICAL,
+                        STATUS_UNKNOWN,
+                    ):
                         self._record_event(
-                            "module_status",
-                            layer,
+                            "check_status",
+                            check_id,
                             {
-                                "layer": layer,
+                                "check_id": check_id,
+                                "name": result.get("name", check_id),
+                                "probe": result.get("probe", ""),
                                 "status": new_status,
                                 "previous": old_status or "",
                                 "latency_ms": result["latency_ms"],
@@ -215,7 +216,7 @@ class AgentApp:
                         )
                         LOGGER.info(
                             "检测状态变化 %s：%s -> %s",
-                            layer,
+                            check_id,
                             old_status or "未知",
                             new_status,
                         )
@@ -226,14 +227,27 @@ class AgentApp:
             return results
 
     def _evaluate_guards(self, now=None, previous=None):
-        return guard_service.evaluate_guards(
+        snapshots, fresh = guard_service.evaluate_guards(
             self.guards,
+            self.checks,
             self.config,
+            self.registry,
             self.guard_fsm,
             self._guard_last_run,
             now=now,
             previous=previous,
         )
+        if fresh:
+            current = self.state.snapshot_checks()
+            active = {check["id"] for check in self.checks}
+            merged = {
+                check_id: result
+                for check_id, result in current.items()
+                if check_id in active
+            }
+            merged.update(fresh)
+            self.state.set_checks(merged)
+        return snapshots
 
     def _emit_guard_events(self, previous, current):
         for guard_id, snapshot in current.items():
@@ -477,8 +491,18 @@ class AgentApp:
 
     def _guard_ok(self, guard):
         try:
-            checks = run_checks(guard, self.config, runner=CommandRunner())
-            return aggregate_status(checks, guard.get("evaluate")) == STATUS_OK
+            results = guard_service.run_guard_checks(
+                guard, self.checks, self.registry, self.config
+            )
+            return (
+                aggregate_status(
+                    results,
+                    guard.get("evaluate"),
+                    guard.get("check_refs"),
+                    self.checks,
+                )
+                == STATUS_OK
+            )
         except Exception:
             LOGGER.exception("守护项复检异常")
             log_event(
@@ -507,31 +531,6 @@ class AgentApp:
     def api_guards_update(self, guards):
         guard_service.update_local_guards(self, guards)
         return self.api_guards()
-
-    def api_modules(self):
-        return views.build_modules()
-
-    def api_script_import(self, payload):
-        entry = views.import_script(payload)
-        self._record_event(
-            "probe_imported",
-            "probes",
-            {"name": entry.get("name"), "file": entry.get("file")},
-        )
-        log_event(
-            "info",
-            "probe.import",
-            "脚本探测器已导入",
-            probe={"name": entry.get("name"), "file": entry.get("file")},
-            sha256=entry.get("sha256"),
-        )
-        return {"ok": True, "script": entry, "modules": self.api_modules()}
-
-    def api_script_delete(self, name):
-        cleaned = views.remove_script(name)
-        self._record_event("probe_deleted", "probes", {"name": cleaned})
-        log_event("info", "probe.delete", "脚本探测器已删除", probe={"name": cleaned})
-        return {"ok": True, "modules": self.api_modules()}
 
     def api_settings(self):
         return views.build_settings(self)
@@ -715,9 +714,6 @@ class AgentApp:
                 login_window=int(httpd_cfg.get("login_window", 60)),
                 guards_provider=self.api_guards,
                 guards_handler=self.api_guards_update,
-                modules_provider=self.api_modules,
-                script_import_handler=self.api_script_import,
-                script_delete_handler=self.api_script_delete,
                 settings_provider=self.api_settings,
                 settings_handler=self.api_settings_update,
             )

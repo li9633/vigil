@@ -25,10 +25,7 @@ const groups: NavGroup[] = [
   },
   {
     title: '操作',
-    items: [
-      { to: '/actions', label: '手动动作' },
-      { to: '/modules', label: '模块管理' },
-    ],
+    items: [{ to: '/actions', label: '手动动作' }],
   },
   {
     title: '系统',

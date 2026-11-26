@@ -1,130 +1,147 @@
-"""Guard 配置模型与迁移测试。"""
+"""Guard 配置模型测试（schema v3，check_refs）。"""
 
 import copy
 import unittest
 import uuid
 
-from vigil_agent.config import ConfigError, default_config, validate_config
+from vigil_agent.config import default_config
 from vigil_agent.guards.model import (
+    ALLOWED_ACTIONS,
     BUILTIN_NETWORK_ID,
-    BUILTIN_NETWORK_TEMPLATE,
-    build_network_guard,
-    migrate_config,
+    DEFAULT_POLICY,
+    normalize_guard,
+    validate_guards,
 )
 
 
-class GuardMigrationTest(unittest.TestCase):
-    def test_schema1_migrates_to_network_guard(self):
-        cfg = default_config()
-        cfg["schema_version"] = 1
-        cfg["detect"].update({"wan_device": "eth0", "dns_probe": "example.com"})
-        cfg["action"].update(
-            {"enabled": False, "failure_threshold": 4, "cooldown_seconds": 120}
-        )
+def _config():
+    return default_config()
 
-        migrate_config(cfg)
 
-        self.assertEqual(cfg["schema_version"], 2)
-        self.assertEqual(len(cfg["guards"]), 1)
-        guard = cfg["guards"][0]
-        self.assertEqual(guard["id"], BUILTIN_NETWORK_ID)
-        self.assertEqual(guard["template"], BUILTIN_NETWORK_TEMPLATE)
-        self.assertEqual(guard["policy"]["fail_threshold"], 4)
-        self.assertEqual(guard["policy"]["cooldown"], 120)
-        self.assertFalse(cfg["action_safety"]["global_enabled"])
+def _validate(guards, checks=None):
+    errors = []
+    payload = {"guards": guards}
+    if checks is not None:
+        payload["checks"] = checks
+    validate_guards(payload, errors, checks=checks)
+    return errors
 
-        probes = [check["probe"] for check in guard["checks"]]
-        self.assertEqual(probes, ["carrier", "pppoe", "route", "dns", "http"])
-        self.assertEqual(guard["checks"][0]["params"]["device"], "eth0")
-        self.assertEqual(guard["checks"][3]["params"]["name"], "example.com")
 
-    def test_migration_is_idempotent(self):
-        cfg = migrate_config(default_config())
-        first = copy.deepcopy(cfg)
-        migrate_config(cfg)
-        self.assertEqual(cfg, first)
+class NormalizeGuardTest(unittest.TestCase):
+    def test_fills_defaults_without_generating_checks(self):
+        guard = normalize_guard({"name": "测试"})
+        self.assertTrue(uuid.UUID(guard["id"]))
+        self.assertEqual(guard["check_refs"], [])
+        self.assertEqual(guard["policy"], DEFAULT_POLICY)
+        self.assertEqual(guard["evaluate"], {"mode": "dependency_tree", "quorum": 1})
+        self.assertEqual(guard["limits"], {"max_risk_level": "L1"})
+        self.assertNotIn("checks", guard)
 
-    def test_existing_guard_is_preserved(self):
-        cfg = default_config()
-        cfg["schema_version"] = 2
-        guard = build_network_guard(cfg)
-        guard["id"] = str(uuid.uuid4())
-        guard["name"] = "自定义网络守护"
-        cfg["guards"] = [guard]
-        cfg["action_safety"] = {
-            "global_enabled": True,
-            "max_risk_level": "L1",
-            "max_actions_per_hour": 2,
-            "maintenance_windows": [],
-        }
-
-        migrate_config(cfg)
-
-        self.assertEqual(cfg["guards"][0]["id"], guard["id"])
-        self.assertEqual(cfg["guards"][0]["name"], "自定义网络守护")
-        self.assertEqual(cfg["action_safety"]["max_actions_per_hour"], 2)
-
-    def test_missing_optional_fields_are_normalized(self):
-        cfg = default_config()
-        cfg["guards"] = [
+    def test_keeps_existing_fields(self):
+        guard = normalize_guard(
             {
-                "id": str(uuid.uuid4()),
-                "name": "最小守护",
-                "checks": [{"probe": "route"}],
-                "recovery": [{"action": "ifup_wan"}],
+                "id": BUILTIN_NETWORK_ID,
+                "name": "断网",
+                "check_refs": ["wan-link"],
+                "policy": {"interval": 60},
+                "recovery": [{"action": "ifup_wan", "verify_after": 30}],
             }
-        ]
-        migrate_config(cfg)
-        guard = cfg["guards"][0]
-        self.assertEqual(guard["policy"]["fail_threshold"], 2)
-        self.assertEqual(guard["policy"]["success_threshold"], 1)
-        self.assertEqual(guard["limits"]["max_risk_level"], "L1")
-        self.assertIsInstance(guard["enabled"], bool)
+        )
+        self.assertEqual(guard["policy"]["interval"], 60)
+        self.assertEqual(guard["policy"]["fail_threshold"], DEFAULT_POLICY["fail_threshold"])
+        self.assertEqual(guard["recovery"][0]["verify_after"], 30)
 
 
-class GuardValidationTest(unittest.TestCase):
-    def test_duplicate_uuid_is_rejected(self):
-        cfg = migrate_config(default_config())
-        cfg["guards"].append(copy.deepcopy(cfg["guards"][0]))
-        with self.assertRaises(ConfigError):
-            validate_config(cfg)
+class ValidateGuardsTest(unittest.TestCase):
+    def setUp(self):
+        self.cfg = _config()
+        self.checks = self.cfg["checks"]
 
-    def test_duplicate_template_is_rejected(self):
-        cfg = migrate_config(default_config())
-        second = copy.deepcopy(cfg["guards"][0])
-        second["id"] = str(uuid.uuid4())
-        cfg["guards"].append(second)
-        with self.assertRaises(ConfigError):
-            validate_config(cfg)
+    def test_default_config_passes(self):
+        self.assertEqual(validate_guards(self.cfg, [], checks=self.checks), [])
 
-    def test_unknown_action_is_rejected(self):
-        cfg = migrate_config(default_config())
-        cfg["guards"][0]["recovery"] = [{"action": "reboot"}]
-        with self.assertRaises(ConfigError):
-            validate_config(cfg)
+    def test_empty_guards_rejected(self):
+        errors = _validate([], checks=self.checks)
+        self.assertTrue(any("guards" in item for item in errors))
 
-    def test_restart_service_requires_whitelisted_target(self):
-        cfg = migrate_config(default_config())
-        cfg["guards"][0]["recovery"] = [{"action": "restart_service"}]
-        with self.assertRaises(ConfigError):
-            validate_config(cfg)
+    def test_check_refs_must_exist(self):
+        guard = normalize_guard({"name": "x", "check_refs": ["missing"]})
+        errors = _validate([guard], checks=self.checks)
+        self.assertTrue(any("check_refs" in item for item in errors))
 
-        cfg["guards"][0]["recovery"] = [
-            {"action": "restart_service", "target": "dnsmasq"}
-        ]
-        validate_config(cfg)
+    def test_check_refs_must_be_non_empty(self):
+        guard = normalize_guard({"name": "x", "check_refs": []})
+        errors = _validate([guard], checks=self.checks)
+        self.assertTrue(any("check_refs" in item for item in errors))
 
-    def test_invalid_policy_is_rejected(self):
-        cfg = migrate_config(default_config())
-        cfg["guards"][0]["policy"]["fail_threshold"] = 0
-        with self.assertRaises(ConfigError):
-            validate_config(cfg)
+    def test_duplicate_guard_id_rejected(self):
+        first = normalize_guard({"name": "a", "check_refs": ["wan-link"]})
+        second = copy.deepcopy(first)
+        errors = _validate([first, second], checks=self.checks)
+        self.assertTrue(any("id 重复" in item for item in errors))
 
-    def test_risk_level_is_limited(self):
-        cfg = migrate_config(default_config())
-        cfg["guards"][0]["limits"]["max_risk_level"] = "L2"
-        with self.assertRaises(ConfigError):
-            validate_config(cfg)
+    def test_duplicate_template_rejected(self):
+        first = normalize_guard(
+            {"name": "a", "template": "t", "check_refs": ["wan-link"]}
+        )
+        second = normalize_guard(
+            {"name": "b", "template": "t", "check_refs": ["wan-link"]}
+        )
+        errors = _validate([first, second], checks=self.checks)
+        self.assertTrue(any("template 重复" in item for item in errors))
+
+    def test_invalid_uuid_rejected(self):
+        guard = normalize_guard({"id": "not-a-uuid", "name": "x", "check_refs": ["wan-link"]})
+        errors = _validate([guard], checks=self.checks)
+        self.assertTrue(any("UUID" in item for item in errors))
+
+    def test_policy_bounds(self):
+        guard = normalize_guard(
+            {"name": "x", "check_refs": ["wan-link"], "policy": {"interval": 1}}
+        )
+        errors = _validate([guard], checks=self.checks)
+        self.assertTrue(any("policy.interval" in item for item in errors))
+
+    def test_recovery_action_must_be_whitelisted(self):
+        guard = normalize_guard(
+            {
+                "name": "x",
+                "check_refs": ["wan-link"],
+                "recovery": [{"action": "reboot"}],
+            }
+        )
+        errors = _validate([guard], checks=self.checks)
+        self.assertTrue(any("action" in item for item in errors))
+        self.assertIn("ifup_wan", ALLOWED_ACTIONS)
+
+    def test_restart_service_requires_target(self):
+        guard = normalize_guard(
+            {
+                "name": "x",
+                "check_refs": ["wan-link"],
+                "recovery": [{"action": "restart_service"}],
+            }
+        )
+        errors = _validate([guard], checks=self.checks)
+        self.assertTrue(any("target" in item for item in errors))
+
+    def test_evaluate_mode_rejected(self):
+        guard = normalize_guard(
+            {
+                "name": "x",
+                "check_refs": ["wan-link"],
+                "evaluate": {"mode": "nope"},
+            }
+        )
+        errors = _validate([guard], checks=self.checks)
+        self.assertTrue(any("evaluate.mode" in item for item in errors))
+
+    def test_action_safety_validation(self):
+        cfg = _config()
+        cfg["action_safety"]["max_risk_level"] = "L3"
+        errors = []
+        validate_guards(cfg, errors, checks=self.checks)
+        self.assertTrue(any("max_risk_level" in item for item in errors))
 
 
 if __name__ == "__main__":

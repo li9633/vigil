@@ -1,6 +1,6 @@
 """Guard 状态机：失败计数、恢复确认、放弃与退避。
 
-检测结果由 guards.checks 提供，动作执行由调用方负责；本模块只维护每个 Guard 的
+检测结果由 checks.runner 提供，动作执行由调用方负责；本模块只维护每个 Guard 的
 状态与计数，并把状态持久化到 state 文件，保证重启后冷却与退避不被清零。
 """
 
@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 
-from .checks import STATUS_SKIPPED
+from ..checks.runner import STATUS_SKIPPED
 
 STATE_OK = "OK"
 STATE_PENDING = "PENDING"

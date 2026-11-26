@@ -6,7 +6,7 @@ import unittest
 
 from vigil_agent.action.executor import ActionExecutor
 from vigil_agent.config import default_config
-from vigil_agent.detect.base import CommandResult
+from vigil_agent.utils.proc import ProcessResult
 
 
 class FakeRunner:
@@ -17,14 +17,14 @@ class FakeRunner:
         self.timed_out = timed_out
         self.calls = []
 
-    def run(self, args, timeout=None):
+    def run(self, args, timeout=None, env=None, cwd=None):
         self.calls.append(" ".join(args))
-        return CommandResult(
+        return ProcessResult(
             exit_code=self.exit_code,
             stdout=self.stdout,
             stderr=self.stderr,
-            elapsed_ms=5,
             timed_out=self.timed_out,
+            latency_ms=5,
         )
 
 
@@ -42,7 +42,15 @@ class ExecutorTestBase(unittest.TestCase):
 
     def make_executor(self, runner=None, **overrides):
         cfg = default_config()
-        cfg["action"].update(overrides)
+        for key, value in overrides.items():
+            if key == "enabled":
+                cfg["action_safety"]["global_enabled"] = value
+            elif key == "max_level":
+                cfg["action_safety"]["max_risk_level"] = value
+            elif key == "max_per_hour":
+                cfg["action_safety"]["max_actions_per_hour"] = value
+            else:
+                cfg["action"][key] = value
         return ActionExecutor(
             cfg,
             runner=runner or self.runner,

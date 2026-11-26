@@ -11,7 +11,6 @@ import unittest
 from vigil_agent.api import create_server
 from vigil_agent.app import AgentApp
 from vigil_agent.config import default_config
-from vigil_agent.guards.model import migrate_config
 
 
 def _build_app(root):
@@ -25,7 +24,6 @@ def _build_app(root):
         "lock_path": os.path.join(root, "vigil.lock"),
     }
     cfg["httpd"]["token"] = "admin-token"
-    migrate_config(cfg)
     path = os.path.join(root, "config.json")
     return AgentApp(cfg, config_path=path, httpd_enabled=False), path
 

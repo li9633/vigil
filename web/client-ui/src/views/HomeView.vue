@@ -20,7 +20,6 @@ const status = ref<ClientStatusSnapshot | null>(null)
 const loading = ref(false)
 const error = ref('')
 
-const modules = computed(() => status.value?.modules ?? [])
 const guards = computed(() => status.value?.guards ?? [])
 const latestChecks = computed(() => (status.value?.latest_checks ?? []).slice(0, 5))
 const serverConnected = computed(() => status.value?.server_connected ?? null)
@@ -143,28 +142,6 @@ const poll = usePolling(load, {
         </ul>
         <div v-else class="panel-body">
           <EmptyState compact title="暂无守护项" description="尚未配置守护项，或等待首轮检测结果。" />
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title">模块状态</span>
-          <router-link class="panel-link" to="/checks">查看检测项</router-link>
-        </div>
-        <ul v-if="modules.length" class="list">
-          <li v-for="module in modules" :key="module.id" class="list-item">
-            <div class="list-main">
-              <p class="list-title mono">{{ module.name || module.id }}</p>
-              <p class="list-meta">{{ module.layer || module.id }}</p>
-            </div>
-            <div class="list-side">
-              <StatusTag :status="module.status" size="sm" />
-              <span>{{ formatLatency(module.latency_ms) }}</span>
-            </div>
-          </li>
-        </ul>
-        <div v-else class="panel-body">
-          <EmptyState compact title="暂无模块数据" description="等待下一次心跳上报模块快照。" />
         </div>
       </div>
 

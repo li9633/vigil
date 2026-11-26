@@ -12,12 +12,11 @@ import sys
 import threading
 import time
 
-from .detect.base import (
+from .checks.runner import (
     STATUS_CRITICAL,
     STATUS_OK,
     STATUS_SKIPPED,
     STATUS_UNKNOWN,
-    STATUS_WARN,
 )
 from .logstore import (
     CompressingRotatingFileHandler,
@@ -29,6 +28,8 @@ from .utils.fs import ensure_dir
 from .utils.time import to_iso
 
 LOGGER = logging.getLogger("vigil.agent")
+
+STATUS_WARN = "warn"
 
 
 class RuntimeState:
@@ -135,6 +136,38 @@ def evidence_text(evidence):
         return evidence
     if not isinstance(evidence, dict):
         return str(evidence)
+
+    observed = evidence.get("observed")
+    if isinstance(observed, dict):
+        parts = []
+        reason = evidence.get("reason")
+        if reason:
+            parts.append("reason=%s" % reason)
+        for key in (
+            "device",
+            "interface",
+            "carrier",
+            "up",
+            "uptime",
+            "egress_ip",
+            "addresses",
+            "status",
+            "connected",
+            "running",
+            "reachable",
+            "loss_percent",
+            "exit_code",
+        ):
+            value = observed.get(key)
+            if value is None or value == "":
+                continue
+            parts.append("%s=%s" % (key, value))
+        error = observed.get("error") or evidence.get("error")
+        if error:
+            parts.append("error=%s" % error)
+        if parts:
+            return ", ".join(parts)
+
     parts = []
     for key in (
         "reason",

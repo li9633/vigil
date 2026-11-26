@@ -87,15 +87,6 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
         if method == "PUT" and path == "/api/guards":
             self._handle_guards_update()
             return
-        if method == "GET" and path == "/api/modules":
-            self._serve_provider(self.server.modules_provider)
-            return
-        if method == "POST" and path == "/api/modules/script":
-            self._handle_script_import()
-            return
-        if method == "POST" and path == "/api/modules/script/delete":
-            self._handle_script_delete()
-            return
         if method == "GET" and path == "/api/settings":
             self._serve_provider(self.server.settings_provider)
             return
@@ -153,55 +144,6 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             return
         except Exception:
             LOGGER.exception("更新本地守护项失败")
-            self._send_json(500, {"error": "internal_error"})
-            return
-        self._send_json(200, payload)
-
-    def _handle_script_import(self):
-        """POST /api/modules/script：导入脚本探测器。"""
-        handler = self.server.script_import_handler
-        if handler is None:
-            self._send_json(500, {"error": "脚本探测器管理未启用"})
-            return
-        body, error = self._read_json()
-        if error:
-            self._send_json(400, {"error": error})
-            return
-        if not isinstance(body, dict):
-            self._send_json(400, {"error": "请求体必须是对象"})
-            return
-        try:
-            payload = handler(body)
-        except ValueError as exc:
-            self._send_json(400, {"error": str(exc) or "脚本探测器配置非法"})
-            return
-        except Exception:
-            LOGGER.exception("导入脚本探测器失败")
-            self._send_json(500, {"error": "internal_error"})
-            return
-        self._send_json(200, payload)
-
-    def _handle_script_delete(self):
-        """POST /api/modules/script/delete：删除脚本探测器。"""
-        handler = self.server.script_delete_handler
-        if handler is None:
-            self._send_json(500, {"error": "脚本探测器管理未启用"})
-            return
-        body, error = self._read_json()
-        if error:
-            self._send_json(400, {"error": error})
-            return
-        name = body.get("name") if isinstance(body, dict) else None
-        if not isinstance(name, str) or not name.strip():
-            self._send_json(400, {"error": "name 不能为空"})
-            return
-        try:
-            payload = handler(name.strip())
-        except ValueError as exc:
-            self._send_json(400, {"error": str(exc) or "删除失败"})
-            return
-        except Exception:
-            LOGGER.exception("删除脚本探测器失败")
             self._send_json(500, {"error": "internal_error"})
             return
         self._send_json(200, payload)

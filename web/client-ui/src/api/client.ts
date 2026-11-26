@@ -13,9 +13,6 @@ import {
   type ListResponse,
   type LogEntry,
   type LogQuery,
-  type ModulesResponse,
-  type ScriptDeleteResponse,
-  type ScriptImportResponse,
 } from '@vigil/shared'
 
 export const clientApi = {
@@ -30,14 +27,6 @@ export const clientApi = {
 
   saveGuards: (guards: GuardDefinition[]) =>
     api.put<GuardConfigResponse>('/api/guards', { guards }),
-
-  modules: () => api.get<ModulesResponse>('/api/modules'),
-
-  importScript: (payload: { name: string; content: string; timeout?: number }) =>
-    api.post<ScriptImportResponse>('/api/modules/script', payload),
-
-  deleteScript: (name: string) =>
-    api.post<ScriptDeleteResponse>('/api/modules/script/delete', { name }),
 
   settings: () => api.get<ClientSettingsSnapshot>('/api/settings'),
 

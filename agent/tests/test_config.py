@@ -1,4 +1,4 @@
-"""配置加载与校验测试。"""
+"""配置加载与校验测试（schema v3）。"""
 
 import json
 import os
@@ -13,35 +13,39 @@ from vigil_agent.config import (
     save_config,
     validate_config,
 )
-from vigil_agent.guards.model import migrate_config
 
 
 class ConfigDefaultsTest(unittest.TestCase):
     def test_defaults_match_design(self):
         cfg = default_config()
-        self.assertEqual(cfg["schema_version"], 2)
-        self.assertEqual(cfg["server"]["base_url"], "")
+        self.assertEqual(cfg["schema_version"], 3)
         self.assertEqual(cfg["server"]["heartbeat_interval"], 30)
         self.assertTrue(cfg["server"]["verify_tls"])
-        self.assertEqual(cfg["detect"]["wan_device"], "auto")
-        self.assertEqual(cfg["detect"]["wan_interface"], "wan")
-        self.assertEqual(cfg["detect"]["dns_probe"], "www.baidu.com")
-        self.assertEqual(cfg["detect"]["timeout"], 3)
+        self.assertNotIn("detect", cfg)
+        self.assertEqual([item["id"] for item in cfg["checks"]], [
+            "wan-link",
+            "pppoe-session",
+            "default-route",
+            "dns",
+            "http204",
+        ])
         self.assertEqual(
-            cfg["detect"]["http_probes"],
-            ["http://connect.rom.miui.com/generate_204"],
+            cfg["guards"][0]["check_refs"],
+            ["wan-link", "pppoe-session", "default-route", "dns", "http204"],
         )
-        self.assertTrue(cfg["action"]["enabled"])
-        self.assertEqual(cfg["action"]["max_level"], "L1")
-        self.assertEqual(cfg["action"]["cooldown_seconds"], 300)
-        self.assertEqual(cfg["action"]["max_per_hour"], 3)
+        self.assertEqual(cfg["action_safety"]["max_risk_level"], "L1")
+        self.assertEqual(cfg["action"]["wan_interface"], "wan")
         self.assertEqual(cfg["httpd"]["port"], 8787)
+
+    def test_default_config_is_valid(self):
+        validate_config(default_config())
 
     def test_missing_file_uses_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "missing.json")
             cfg = load_config(path, env={})
-        self.assertEqual(cfg, migrate_config(default_config()))
+        self.assertEqual(cfg["schema_version"], 3)
+        self.assertEqual(len(cfg["checks"]), 5)
 
     def test_file_overrides_defaults(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -49,18 +53,19 @@ class ConfigDefaultsTest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(
                     {
-                        "server": {"client_id": "cl_1", "base_url": "https://vigil.example.com"},
-                        "detect": {"wan_device": "pppoe-wan"},
+                        "server": {
+                            "client_id": "cl_1",
+                            "base_url": "https://vigil.example.com",
+                        },
+                        "action": {"wan_interface": "pppoe-wan"},
                     },
                     handle,
                 )
             cfg = load_config(path, env={})
         self.assertEqual(cfg["server"]["client_id"], "cl_1")
         self.assertEqual(cfg["server"]["base_url"], "https://vigil.example.com")
-        self.assertEqual(cfg["detect"]["wan_device"], "pppoe-wan")
-        # 未覆盖的键保持默认
-        self.assertEqual(cfg["detect"]["timeout"], 3)
-        self.assertEqual(cfg["action"]["max_per_hour"], 3)
+        self.assertEqual(cfg["action"]["wan_interface"], "pppoe-wan")
+        self.assertEqual(cfg["httpd"]["port"], 8787)
 
     def test_environment_overrides(self):
         env = {
@@ -69,31 +74,24 @@ class ConfigDefaultsTest(unittest.TestCase):
             "VIGIL_SERVER_SECRET": "secret value",
             "VIGIL_SERVER_HEARTBEAT_INTERVAL": "45",
             "VIGIL_SERVER_VERIFY_TLS": "false",
-            "VIGIL_WAN_DEVICE": "eth0",
-            "VIGIL_HTTP_PROBES": "http://a.example/204, http://b.example/204",
-            "VIGIL_DETECT_TIMEOUT": "5",
+            "VIGIL_WAN_INTERFACE": "eth0",
             "VIGIL_ACTION_ENABLED": "0",
             "VIGIL_ACTION_COOLDOWN_SECONDS": "60",
+            "VIGIL_ACTION_ALLOWED_SERVICES": "dnsmasq, dropbear",
             "VIGIL_HTTPD_PORT": "9000",
             "VIGIL_HTTPD_TOKEN": "tok",
         }
         with tempfile.TemporaryDirectory() as tmp:
             cfg = load_config(os.path.join(tmp, "none.json"), env=env)
         self.assertEqual(cfg["server"]["base_url"], "https://vigil.example.com")
-        self.assertEqual(cfg["server"]["client_id"], "cl_env")
         self.assertEqual(cfg["server"]["secret"], "secret value")
         self.assertEqual(cfg["server"]["heartbeat_interval"], 45)
         self.assertFalse(cfg["server"]["verify_tls"])
-        self.assertEqual(cfg["detect"]["wan_device"], "eth0")
-        self.assertEqual(
-            cfg["detect"]["http_probes"],
-            ["http://a.example/204", "http://b.example/204"],
-        )
-        self.assertEqual(cfg["detect"]["timeout"], 5.0)
-        self.assertFalse(cfg["action"]["enabled"])
+        self.assertEqual(cfg["action"]["wan_interface"], "eth0")
+        self.assertFalse(cfg["action_safety"]["global_enabled"])
         self.assertEqual(cfg["action"]["cooldown_seconds"], 60)
+        self.assertEqual(cfg["action"]["allowed_services"], ["dnsmasq", "dropbear"])
         self.assertEqual(cfg["httpd"]["port"], 9000)
-        self.assertEqual(cfg["httpd"]["token"], "tok")
 
     def test_env_config_path_is_used(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,6 +142,10 @@ class ConfigValidationTest(unittest.TestCase):
             validate_config(cfg)
         return str(ctx.exception)
 
+    def test_schema_2_is_rejected(self):
+        message = self._invalid(lambda cfg: cfg.update({"schema_version": 2}))
+        self.assertIn("schema_version", message)
+
     def test_bad_base_url(self):
         message = self._invalid(
             lambda cfg: cfg["server"].update({"base_url": "ftp://example.com"})
@@ -156,19 +158,42 @@ class ConfigValidationTest(unittest.TestCase):
         )
         self.assertIn("heartbeat_interval", message)
 
-    def test_bad_timeout(self):
-        message = self._invalid(lambda cfg: cfg["detect"].update({"timeout": 0}))
-        self.assertIn("detect.timeout", message)
+    def test_bad_check_timeout(self):
+        message = self._invalid(lambda cfg: cfg["checks"][0].update({"timeout": 0}))
+        self.assertIn("timeout", message)
 
-    def test_bad_probes(self):
+    def test_unknown_probe_is_rejected(self):
+        message = self._invalid(lambda cfg: cfg["checks"][0].update({"probe": "nope"}))
+        self.assertIn("probe", message)
+
+    def test_unknown_dependency_is_rejected(self):
         message = self._invalid(
-            lambda cfg: cfg["detect"].update({"http_probes": ["not-a-url"]})
+            lambda cfg: cfg["checks"][0].update({"depends_on": ["missing"]})
         )
-        self.assertIn("http_probes", message)
+        self.assertIn("depends_on", message)
 
-    def test_bad_max_level(self):
-        message = self._invalid(lambda cfg: cfg["action"].update({"max_level": "L3"}))
-        self.assertIn("max_level", message)
+    def test_check_cycle_is_rejected(self):
+        def mutate(cfg):
+            cfg["checks"][0]["depends_on"] = ["http204"]
+
+        message = self._invalid(mutate)
+        self.assertIn("依赖", message)
+
+    def test_guard_unknown_check_ref_is_rejected(self):
+        message = self._invalid(
+            lambda cfg: cfg["guards"][0]["check_refs"].append("missing")
+        )
+        self.assertIn("check_refs", message)
+
+    def test_guard_empty_check_refs_is_rejected(self):
+        message = self._invalid(lambda cfg: cfg["guards"][0].update({"check_refs": []}))
+        self.assertIn("check_refs", message)
+
+    def test_bad_action_max_level(self):
+        message = self._invalid(
+            lambda cfg: cfg["action_safety"].update({"max_risk_level": "L3"})
+        )
+        self.assertIn("max_risk_level", message)
 
     def test_bad_port(self):
         message = self._invalid(lambda cfg: cfg["httpd"].update({"port": 70000}))
@@ -177,16 +202,16 @@ class ConfigValidationTest(unittest.TestCase):
     def test_multiple_errors_reported(self):
         message = self._invalid(
             lambda cfg: (
-                cfg["action"].update({"max_per_hour": 0}),
-                cfg["detect"].update({"dns_probe": ""}),
+                cfg["action_safety"].update({"max_actions_per_hour": 0}),
+                cfg["checks"][0].update({"timeout": 0}),
             )
         )
-        self.assertIn("max_per_hour", message)
-        self.assertIn("dns_probe", message)
+        self.assertIn("max_actions_per_hour", message)
+        self.assertIn("timeout", message)
 
     def test_get_in(self):
         cfg = default_config()
-        self.assertEqual(get_in(cfg, "detect.timeout"), 3)
+        self.assertEqual(get_in(cfg, "action.wan_interface"), "wan")
         self.assertEqual(get_in(cfg, "missing.key", "fallback"), "fallback")
 
 
@@ -206,27 +231,23 @@ class ConfigSaveTest(unittest.TestCase):
         self.assertEqual(loaded["server"]["secret"], "shh")
         self.assertEqual(loaded["httpd"]["port"], 8787)
 
-    def test_schema1_file_is_migrated_and_persisted(self):
+    def test_legacy_file_is_rejected_without_migration(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "config.json")
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "server": {"client_id": "cl_legacy"},
-                        "action": {"max_per_hour": 5},
+                        "guards": [{"checks": [{"probe": "carrier"}]}],
                     },
                     handle,
                 )
-            cfg = load_config(path, env={})
-            self.assertEqual(cfg["schema_version"], 2)
+            with self.assertRaises(ConfigError):
+                load_config(path, env={})
             with open(path, encoding="utf-8") as handle:
                 persisted = json.load(handle)
         self.assertEqual(persisted["schema_version"], 2)
-        self.assertTrue(persisted["guards"])
-        self.assertEqual(persisted["guards"][0]["template"], "network.up")
-        self.assertEqual(persisted["action_safety"]["max_actions_per_hour"], 5)
-        self.assertEqual(persisted["server"]["client_id"], "cl_legacy")
 
     def test_env_overrides_are_not_persisted(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,19 +258,18 @@ class ConfigSaveTest(unittest.TestCase):
             with open(path, encoding="utf-8") as handle:
                 persisted = json.load(handle)
         self.assertEqual(cfg["server"]["secret"], "env-only-secret")
-        self.assertEqual(persisted["server"]["secret"], "")
-        self.assertEqual(persisted["schema_version"], 2)
+        self.assertEqual(persisted, {"server": {"client_id": "cl_legacy"}})
 
     def test_invalid_file_is_not_overwritten(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "config.json")
-            raw = {"schema_version": 1, "server": {"base_url": "ftp://bad"}}
+            raw = {"schema_version": 2, "server": {"base_url": "ftp://bad"}}
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump(raw, handle)
-            cfg = load_config(
-                path, env={"VIGIL_SERVER_BASE_URL": "https://vigil.example.com"}
-            )
-            self.assertEqual(cfg["server"]["base_url"], "https://vigil.example.com")
+            with self.assertRaises(ConfigError):
+                load_config(
+                    path, env={"VIGIL_SERVER_BASE_URL": "https://vigil.example.com"}
+                )
             with open(path, encoding="utf-8") as handle:
                 persisted = json.load(handle)
         self.assertEqual(persisted, raw)

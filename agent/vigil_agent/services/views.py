@@ -1,4 +1,4 @@
-"""本地 API 视图组装：状态、检查项、设置、模块、事件与日志。
+"""本地 API 视图组装：状态、检测项、设置、事件与日志。
 
 只负责把运行时数据整理为前端契约结构，不处理 HTTP 细节。
 """
@@ -9,35 +9,57 @@ import time
 from urllib.parse import urlparse
 
 from .. import PROTOCOL_VERSION
-from ..detect.base import STATUS_CRITICAL, STATUS_OK, STATUS_UNKNOWN, STATUS_WARN
-from ..detect.script import delete_script, inspect_scripts, save_script
-from ..guards import BUILTIN_PROBE_INFO
+from ..checks.model import dependency_closure, dependency_graph
+from ..checks.runner import STATUS_CRITICAL, STATUS_OK, STATUS_UNKNOWN
 from ..logstore import export_log_events, filter_events, read_log_events
-from ..runtime import derive_client_state, evidence_text, iso_utc, read_uptime
+from ..runtime import (
+    STATUS_WARN,
+    derive_client_state,
+    evidence_text,
+    iso_utc,
+    read_uptime,
+)
+
+
+def _observed(app, checks, probe_id):
+    """取第一个使用指定 probe 的检测项的观测数据。"""
+    for check in app.checks:
+        if check.get("probe") != probe_id:
+            continue
+        result = checks.get(check["id"]) or {}
+        observed = (result.get("evidence") or {}).get("observed")
+        if isinstance(observed, dict):
+            return observed
+    return {}
+
+
+def _check_interval(app, check_id):
+    """检测项被 Guard 引用时的最小间隔，用于前端展示。"""
+    graph = dependency_graph(app.checks)
+    intervals = []
+    for guard in app.guards or []:
+        if not guard.get("enabled", True):
+            continue
+        roots = guard.get("check_refs") or []
+        if check_id not in dependency_closure(roots, graph):
+            continue
+        try:
+            value = int((guard.get("policy") or {}).get("interval") or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            intervals.append(value)
+    return min(intervals) if intervals else 30
 
 
 def build_status(app):
     checks = app.state.snapshot_checks()
-    order = app.engine.registry.ordered()
-    wan = wan_info(app.config, checks)
+    wan = wan_info(app, checks)
     action_stats = app.executor.stats()
     now = time.time()
-    modules = []
-    for layer in order:
-        result = checks.get(layer)
-        if not result:
-            continue
-        module = {
-            "id": layer,
-            "name": layer,
-            "layer": layer,
-            "status": result.get("status"),
-            "latency_ms": result.get("latency_ms"),
-        }
-        uptime = (result.get("evidence") or {}).get("uptime")
-        if isinstance(uptime, int) and not isinstance(uptime, bool):
-            module["uptime"] = uptime
-        modules.append(module)
+    ordered = [
+        checks[check["id"]] for check in app.checks if check["id"] in checks
+    ]
 
     last_heartbeat = app.state.last_heartbeat
     return {
@@ -53,7 +75,7 @@ def build_status(app):
             "config_etag": app._etag or "",
         },
         "wan": wan,
-        "checks": [checks[layer] for layer in order if layer in checks],
+        "checks": ordered,
         "spool": app.spool.stats(),
         "actions": action_stats,
         # 前端 ClientStatusSnapshot 契约字段
@@ -66,7 +88,6 @@ def build_status(app):
         "server_connected": bool(last_heartbeat),
         "last_heartbeat_at": iso_utc(last_heartbeat),
         "last_beacon_at": None,
-        "modules": modules,
         "guards": list(app.state.snapshot_guards().values()),
         "guards_source": app.guards_source,
         "guards_editable": app.guards_source == "local",
@@ -79,23 +100,26 @@ def build_status(app):
 def build_checks(app, checks=None):
     """把检测结果整理成前端 CheckItem 列表。"""
     checks = checks if checks is not None else app.state.snapshot_checks()
-    updated_at = iso_utc(app.state.last_check_at)
     items = []
-    for layer in app.engine.registry.ordered():
-        result = checks.get(layer)
+    for check in app.checks:
+        cid = check["id"]
+        result = checks.get(cid)
         if not result:
             continue
         items.append(
             {
-                "id": layer,
-                "name": layer,
-                "layer": layer,
+                "id": cid,
+                "name": check.get("name") or cid,
+                "layer": check.get("probe") or "",
+                "probe": check.get("probe") or "",
                 "status": result.get("status"),
                 "latency_ms": result.get("latency_ms"),
-                "interval": int(app.config["detect"]["interval"]),
-                "enabled": True,
+                "interval": _check_interval(app, cid),
+                "enabled": bool(check.get("enabled", True)),
                 "evidence": evidence_text(result.get("evidence")),
-                "updated_at": updated_at,
+                "updated_at": iso_utc(
+                    result.get("checked_at") or app.state.last_check_at
+                ),
             }
         )
     return items
@@ -133,37 +157,6 @@ def build_settings(app):
         "guards_source": app.guards_source,
         "generated_at": int(now),
     }
-
-
-def build_modules():
-    """GET /api/modules：内置探测器与本地脚本清单。"""
-    return {
-        "builtin": [dict(item) for item in BUILTIN_PROBE_INFO],
-        "scripts": inspect_scripts(),
-    }
-
-
-def import_script(payload):
-    """POST /api/modules/script：导入或覆盖脚本探测器。"""
-    if not isinstance(payload, dict):
-        raise ValueError("请求体必须是对象")
-    content = payload.get("content")
-    if not isinstance(content, str):
-        raise ValueError("content 必须是字符串")
-    return save_script(
-        payload.get("name"),
-        content,
-        timeout=payload.get("timeout", 10),
-    )
-
-
-def remove_script(name):
-    """POST /api/modules/script/delete：删除脚本探测器，返回规范化名称。"""
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("name 不能为空")
-    cleaned = name.strip()
-    delete_script(cleaned)
-    return cleaned
 
 
 def parse_settings_update(payload):
@@ -346,36 +339,41 @@ def export_logs(
     return ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
 
 
-def modules_snapshot(engine, checks):
+def modules_snapshot(app, checks):
+    """心跳兼容字段：按检测项 id 汇总状态与时延。"""
     modules = {}
-    for layer in engine.registry.ordered():
-        result = checks.get(layer)
+    for check in app.checks:
+        cid = check["id"]
+        result = checks.get(cid)
         if not result:
             continue
         item = {
             "status": result.get("status"),
             "latency_ms": int(result.get("latency_ms") or 0),
         }
-        if layer == "net.pppoe":
-            uptime = (result.get("evidence") or {}).get("uptime")
-            if isinstance(uptime, int):
-                item["uptime"] = uptime
-        modules[layer] = item
+        observed = (result.get("evidence") or {}).get("observed") or {}
+        uptime = observed.get("uptime")
+        if isinstance(uptime, int) and not isinstance(uptime, bool):
+            item["uptime"] = uptime
+        modules[cid] = item
     return modules
 
 
-def wan_ip(checks):
-    evidence = (checks.get("net.route") or {}).get("evidence") or {}
-    return evidence.get("egress_ip") or ""
+def wan_ip(app, checks):
+    return str(_observed(app, checks, "route").get("egress_ip") or "")
 
 
-def wan_info(config, checks):
-    carrier = (checks.get("net.carrier") or {}).get("evidence") or {}
-    pppoe = (checks.get("net.pppoe") or {}).get("evidence") or {}
+def wan_info(app, checks):
+    carrier = _observed(app, checks, "carrier")
+    pppoe = _observed(app, checks, "pppoe")
     return {
         "device": carrier.get("device") or "",
-        "interface": str(config["detect"].get("wan_interface") or "wan"),
-        "ip": wan_ip(checks),
+        "interface": str(
+            pppoe.get("interface")
+            or (app.config.get("action") or {}).get("wan_interface")
+            or "wan"
+        ),
+        "ip": wan_ip(app, checks),
         "carrier": carrier.get("carrier", ""),
         "pppoe_up": bool(pppoe.get("up")),
         "pppoe_uptime": int(pppoe.get("uptime") or 0),

@@ -13,17 +13,16 @@ import uuid
 from vigil_agent.api import create_server
 from vigil_agent.app import AgentApp
 from vigil_agent.config import default_config
-from vigil_agent.guards.model import migrate_config
 
 
-def make_guard(name="测试守护", probe="process", interval=30, enabled=True):
+def make_guard(name="测试守护", interval=30, enabled=True, check_refs=None):
     """构造一个可通过 validate_guards 的最小 Guard。"""
     return {
         "id": str(uuid.uuid4()),
         "name": name,
         "template": "",
         "enabled": enabled,
-        "checks": [{"probe": probe, "params": {"name": "vigil"}}],
+        "check_refs": list(check_refs or ["wan-link"]),
         "policy": {"interval": interval},
         "recovery": [{"action": "ifup_wan"}],
         "limits": {"max_risk_level": "L1"},
@@ -67,9 +66,7 @@ class AgentAppGuardTest(unittest.TestCase):
             "lock_path": os.path.join(self.root, "vigil.lock"),
         }
         cfg["httpd"]["token"] = "admin-token"
-        cfg["detect"]["interval"] = 30
         cfg["guards"] = [make_guard(name="初始守护", interval=30)]
-        migrate_config(cfg)
 
         self.app = AgentApp(cfg, config_path=self.config_path, httpd_enabled=False)
         self.initial_guard = self.app.config["guards"][0]
@@ -108,7 +105,7 @@ class AgentAppGuardTest(unittest.TestCase):
             persisted = json.load(handle)
         self.assertEqual([item["id"] for item in persisted["guards"]], [new_guard["id"]])
 
-        # 调度节拍取 detect.interval(30) 与新 Guard 间隔(10) 的最小值
+        # 调度节拍取各 Guard 间隔的最小值
         self.assertEqual(self.app.scheduler._tasks["detect"]["interval"], 10)
 
         event_types = [item["type"] for item in self.app.state.events_snapshot(50)]

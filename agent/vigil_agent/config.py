@@ -1,8 +1,7 @@
-"""配置加载、环境变量覆盖与校验。
+"""配置加载、环境变量覆盖与校验（schema v3）。
 
-配置文件默认位于 /etc/vigil/config.json。缺省值按设计文档第 3.2-3.8 节与第 13 章，
-另补充 httpd / storage 等运行所需配置。所有键都支持通过环境变量覆盖，便于
-安装脚本与排障时临时调整。旧版 schema 1 配置会在加载时自动迁移为 schema 2。
+配置文件默认位于 /etc/vigil/config.json。schema v3 直接使用顶层 `checks` 与
+`guards`，不再有 `detect` 段，也不读取或迁移 V1/V2 配置。
 """
 
 import copy
@@ -12,16 +11,99 @@ import os
 import tempfile
 from urllib.parse import urlsplit
 
-from .guards.model import migrate_config, validate_guards
+from .checks.model import CheckConfigError, normalize_checks, validate_checks
+from .guards.model import (
+    BUILTIN_NETWORK_ID,
+    BUILTIN_NETWORK_TEMPLATE,
+    DEFAULT_ACTION_SAFETY,
+    DEFAULT_POLICY,
+    GuardConfigError,
+    normalize_guard,
+    validate_guards,
+)
+from .probes.builtin import builtin_registry
 
 LOGGER = logging.getLogger(__name__)
 
 # 默认配置文件路径
 DEFAULT_CONFIG_PATH = "/etc/vigil/config.json"
 
-# 缺省配置：与设计文档保持一致，额外补充运行所需字段
+DEFAULT_CHECKS = [
+    {
+        "id": "wan-link",
+        "name": "WAN 物理链路",
+        "probe": "carrier",
+        "params": {"device": "auto"},
+        "expect": {"kind": "carrier", "up": True},
+        "timeout": 3,
+        "depends_on": [],
+        "enabled": True,
+    },
+    {
+        "id": "pppoe-session",
+        "name": "PPPoE 会话",
+        "probe": "pppoe",
+        "params": {"interface": "wan"},
+        "expect": {"kind": "pppoe", "up": True},
+        "timeout": 3,
+        "depends_on": ["wan-link"],
+        "enabled": True,
+    },
+    {
+        "id": "default-route",
+        "name": "默认路由",
+        "probe": "route",
+        "params": {"interface": "wan"},
+        "expect": {"kind": "route", "has_route": True},
+        "timeout": 3,
+        "depends_on": ["pppoe-session"],
+        "enabled": True,
+    },
+    {
+        "id": "dns",
+        "name": "DNS 解析",
+        "probe": "dns",
+        "params": {"name": "www.baidu.com"},
+        "expect": {"kind": "dns", "resolved": True},
+        "timeout": 3,
+        "depends_on": ["default-route"],
+        "enabled": True,
+    },
+    {
+        "id": "http204",
+        "name": "HTTP 204",
+        "probe": "http",
+        "params": {"url": "http://connect.rom.miui.com/generate_204"},
+        "expect": {"kind": "http", "status": [204]},
+        "timeout": 5,
+        "depends_on": ["default-route"],
+        "enabled": True,
+    },
+]
+
+DEFAULT_GUARDS = [
+    {
+        "id": BUILTIN_NETWORK_ID,
+        "name": "断网自动恢复",
+        "template": BUILTIN_NETWORK_TEMPLATE,
+        "enabled": True,
+        "check_refs": [
+            "wan-link",
+            "pppoe-session",
+            "default-route",
+            "dns",
+            "http204",
+        ],
+        "evaluate": {"mode": "dependency_tree", "quorum": 1},
+        "policy": copy.deepcopy(DEFAULT_POLICY),
+        "recovery": [{"action": "ifup_wan", "verify_after": 20}],
+        "limits": {"max_risk_level": "L1"},
+    }
+]
+
+# 缺省配置：与设计文档 11.1 保持一致
 DEFAULT_CONFIG = {
-    "schema_version": 2,
+    "schema_version": 3,
     "server": {
         "base_url": "",
         "client_id": "",
@@ -31,24 +113,16 @@ DEFAULT_CONFIG = {
         "config_poll_interval": 300,
         "verify_tls": True,
     },
-    "guards": [],
-    "detect": {
-        "wan_device": "auto",
-        "wan_interface": "wan",
-        "dns_probe": "www.baidu.com",
-        "http_probes": ["http://connect.rom.miui.com/generate_204"],
-        "timeout": 3,
-        "interval": 30,
-    },
+    "checks": copy.deepcopy(DEFAULT_CHECKS),
+    "guards": copy.deepcopy(DEFAULT_GUARDS),
+    "action_safety": copy.deepcopy(DEFAULT_ACTION_SAFETY),
+    # 动作运行时参数（非安全天花板，天花板在 action_safety）
     "action": {
-        "enabled": True,
-        "max_level": "L1",
-        "failure_threshold": 2,
         "cooldown_seconds": 300,
-        "max_per_hour": 3,
         "allowed_services": ["dnsmasq"],
         "timeout": 30,
         "lock_path": "/var/run/vigil/action.lock",
+        "wan_interface": "wan",
     },
     "httpd": {
         "bind": "0.0.0.0",
@@ -112,18 +186,12 @@ ENV_MAP = (
     ("VIGIL_SERVER_HEARTBEAT_INTERVAL", "server", "heartbeat_interval", "int"),
     ("VIGIL_SERVER_CONFIG_POLL_INTERVAL", "server", "config_poll_interval", "int"),
     ("VIGIL_SERVER_VERIFY_TLS", "server", "verify_tls", "bool"),
-    ("VIGIL_WAN_DEVICE", "detect", "wan_device", "str"),
-    ("VIGIL_WAN_INTERFACE", "detect", "wan_interface", "str"),
-    ("VIGIL_DNS_PROBE", "detect", "dns_probe", "str"),
-    ("VIGIL_HTTP_PROBES", "detect", "http_probes", "list"),
-    ("VIGIL_DETECT_TIMEOUT", "detect", "timeout", "float"),
-    ("VIGIL_DETECT_INTERVAL", "detect", "interval", "int"),
-    ("VIGIL_ACTION_ENABLED", "action", "enabled", "bool"),
-    ("VIGIL_ACTION_MAX_LEVEL", "action", "max_level", "str"),
-    ("VIGIL_ACTION_FAILURE_THRESHOLD", "action", "failure_threshold", "int"),
+    ("VIGIL_ACTION_ENABLED", "action_safety", "global_enabled", "bool"),
+    ("VIGIL_ACTION_MAX_LEVEL", "action_safety", "max_risk_level", "str"),
+    ("VIGIL_ACTION_MAX_PER_HOUR", "action_safety", "max_actions_per_hour", "int"),
     ("VIGIL_ACTION_COOLDOWN_SECONDS", "action", "cooldown_seconds", "int"),
-    ("VIGIL_ACTION_MAX_PER_HOUR", "action", "max_per_hour", "int"),
     ("VIGIL_ACTION_ALLOWED_SERVICES", "action", "allowed_services", "list"),
+    ("VIGIL_WAN_INTERFACE", "action", "wan_interface", "str"),
     ("VIGIL_HTTPD_BIND", "httpd", "bind", "str"),
     ("VIGIL_HTTPD_PORT", "httpd", "port", "int"),
     ("VIGIL_HTTPD_TOKEN", "httpd", "token", "raw"),
@@ -168,13 +236,33 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _is_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
 def _check_url(value):
     parts = urlsplit(value)
     return parts.scheme in ("http", "https") and bool(parts.netloc)
+
+
+def _normalize(cfg, errors):
+    """就地规范化 checks / guards，便于后续校验与运行。"""
+    registry = builtin_registry()
+    checks = cfg.get("checks")
+    if isinstance(checks, list):
+        try:
+            cfg["checks"] = normalize_checks(checks, registry)
+        except CheckConfigError as exc:
+            errors.append(str(exc))
+    guards = cfg.get("guards")
+    if isinstance(guards, list):
+        normalized = []
+        for item in guards:
+            if isinstance(item, dict):
+                try:
+                    normalized.append(normalize_guard(item))
+                except GuardConfigError as exc:
+                    errors.append(str(exc))
+            else:
+                normalized.append(item)
+        cfg["guards"] = normalized
+    return registry
 
 
 def validate_config(cfg):
@@ -184,8 +272,8 @@ def validate_config(cfg):
 
     errors = []
 
-    if cfg.get("schema_version") not in (1, 2):
-        errors.append("schema_version 必须为 1 或 2")
+    if cfg.get("schema_version") != 3:
+        errors.append("schema_version 必须为 3")
 
     server = cfg.get("server")
     if not isinstance(server, dict):
@@ -208,45 +296,21 @@ def validate_config(cfg):
         if not isinstance(server.get("verify_tls", True), bool):
             errors.append("server.verify_tls 必须是布尔值")
 
-    detect = cfg.get("detect")
-    if not isinstance(detect, dict):
-        errors.append("detect 必须是对象")
-    else:
-        for key in ("wan_device", "wan_interface", "dns_probe"):
-            value = detect.get(key)
-            if not isinstance(value, str) or not value.strip():
-                errors.append("detect.%s 必须是非空字符串" % key)
-        probes = detect.get("http_probes")
-        if not isinstance(probes, list):
-            errors.append("detect.http_probes 必须是数组")
-        else:
-            for probe in probes:
-                if not isinstance(probe, str) or not _check_url(probe):
-                    errors.append("detect.http_probes 含非法 URL：%r" % (probe,))
-        timeout = detect.get("timeout", 3)
-        if not _is_number(timeout) or not 0 < timeout <= 60:
-            errors.append("detect.timeout 必须是 (0, 60] 的数值")
-        interval = detect.get("interval", 30)
-        if not _is_int(interval) or not 5 <= interval <= 3600:
-            errors.append("detect.interval 必须是 5-3600 的整数")
+    registry = _normalize(cfg, errors)
+    validate_checks(cfg.get("checks"), registry, errors)
+    validate_guards(cfg, errors)
+
+    action_safety = cfg.get("action_safety")
+    if not isinstance(action_safety, dict):
+        errors.append("action_safety 必须是对象")
 
     action = cfg.get("action")
     if not isinstance(action, dict):
         errors.append("action 必须是对象")
     else:
-        if not isinstance(action.get("enabled", True), bool):
-            errors.append("action.enabled 必须是布尔值")
-        if action.get("max_level") not in ("L0", "L1"):
-            errors.append("action.max_level 只能是 L0 或 L1")
-        threshold = action.get("failure_threshold", 3)
-        if not _is_int(threshold) or not 1 <= threshold <= 10:
-            errors.append("action.failure_threshold 必须是 1-10 的整数")
         cooldown = action.get("cooldown_seconds", 300)
         if not _is_int(cooldown) or not 0 <= cooldown <= 86400:
             errors.append("action.cooldown_seconds 必须是 0-86400 的整数")
-        max_per_hour = action.get("max_per_hour", 3)
-        if not _is_int(max_per_hour) or not 1 <= max_per_hour <= 100:
-            errors.append("action.max_per_hour 必须是 1-100 的整数")
         services = action.get("allowed_services", [])
         if not isinstance(services, list) or not all(
             isinstance(item, str) and item.strip() for item in services
@@ -255,6 +319,9 @@ def validate_config(cfg):
         timeout = action.get("timeout", 30)
         if not _is_int(timeout) or not 1 <= timeout <= 300:
             errors.append("action.timeout 必须是 1-300 的整数")
+        for key in ("lock_path", "wan_interface"):
+            if not isinstance(action.get(key), str) or not action.get(key).strip():
+                errors.append("action.%s 必须是非空字符串" % key)
 
     httpd = cfg.get("httpd")
     if not isinstance(httpd, dict):
@@ -292,21 +359,17 @@ def validate_config(cfg):
     elif not isinstance(agent.get("name", ""), str):
         errors.append("agent.name 必须是字符串")
 
-    if cfg.get("schema_version") == 2 or "guards" in cfg:
-        validate_guards(cfg, errors)
-
     if errors:
         raise ConfigError("；".join(errors))
     return cfg
 
 
-def load_config(path=None, env=None, persist_migration=True):
+def load_config(path=None, env=None):
     """加载配置：缺省值 + 文件 + 环境变量，最后做校验。
 
     path 为空时依次取参数、环境变量 VIGIL_CONFIG、默认路径。
     文件不存在时使用缺省值；文件存在但 JSON 非法时抛 ConfigError。
-    文件仍为 schema 1（或缺少 guards）时，迁移后的结果会回写磁盘（不含环境变量
-    覆盖，避免把临时密钥固化到配置文件）；回写失败只记录告警，不影响启动。
+    schema_version 不是 3 时整份配置不生效，不做任何迁移。
     """
     if env is None:
         env = os.environ
@@ -314,8 +377,6 @@ def load_config(path=None, env=None, persist_migration=True):
         path = env.get("VIGIL_CONFIG") or DEFAULT_CONFIG_PATH
 
     cfg = default_config()
-    file_cfg = default_config()
-    needs_persist = False
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as handle:
@@ -327,21 +388,9 @@ def load_config(path=None, env=None, persist_migration=True):
         if not isinstance(data, dict):
             raise ConfigError("配置文件根节点必须是 JSON 对象")
         _deep_merge(cfg, data)
-        _deep_merge(file_cfg, data)
-        needs_persist = data.get("schema_version") != 2 or "guards" not in data
 
     apply_env(cfg, env)
-    migrate_config(cfg)
     validate_config(cfg)
-
-    if needs_persist and persist_migration:
-        migrate_config(file_cfg)
-        try:
-            validate_config(file_cfg)
-            save_config(file_cfg, path)
-            LOGGER.info("配置已迁移到 schema 2 并回写：%s", path)
-        except (ConfigError, OSError) as exc:
-            LOGGER.warning("配置迁移回写失败，继续使用内存配置：%s", exc)
     return cfg
 
 

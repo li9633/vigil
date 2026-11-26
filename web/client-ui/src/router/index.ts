@@ -53,12 +53,6 @@ const router = createRouter({
           meta: { title: '手动动作' },
         },
         {
-          path: 'modules',
-          name: 'modules',
-          component: () => import('@/views/ModulesView.vue'),
-          meta: { title: '模块管理' },
-        },
-        {
           path: 'logs',
           name: 'logs',
           component: () => import('@/views/LogsView.vue'),

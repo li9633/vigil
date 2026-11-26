@@ -27,9 +27,6 @@ class VigilHTTPServer(ThreadingHTTPServer):
         login_window=60,
         guards_provider=None,
         guards_handler=None,
-        modules_provider=None,
-        script_import_handler=None,
-        script_delete_handler=None,
         settings_provider=None,
         settings_handler=None,
         logs_export_provider=None,
@@ -44,9 +41,6 @@ class VigilHTTPServer(ThreadingHTTPServer):
         self.action_handler = action_handler
         self.guards_provider = guards_provider
         self.guards_handler = guards_handler
-        self.modules_provider = modules_provider
-        self.script_import_handler = script_import_handler
-        self.script_delete_handler = script_delete_handler
         self.settings_provider = settings_provider
         self.settings_handler = settings_handler
         self.logs_export_provider = logs_export_provider
@@ -73,9 +67,6 @@ def create_server(
     login_window=60,
     guards_provider=None,
     guards_handler=None,
-    modules_provider=None,
-    script_import_handler=None,
-    script_delete_handler=None,
     settings_provider=None,
     settings_handler=None,
     logs_export_provider=None,
@@ -95,9 +86,6 @@ def create_server(
         login_window=login_window,
         guards_provider=guards_provider,
         guards_handler=guards_handler,
-        modules_provider=modules_provider,
-        script_import_handler=script_import_handler,
-        script_delete_handler=script_delete_handler,
         settings_provider=settings_provider,
         settings_handler=settings_handler,
         logs_export_provider=logs_export_provider,

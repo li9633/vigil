@@ -1,12 +1,5 @@
-"""Guard 领域模型。"""
+"""Guard 领域模型：状态机、恢复链与配置校验。"""
 
-from .checks import (  # noqa: F401
-    BUILTIN_PROBE_INFO,
-    BUILTIN_PROBES,
-    aggregate_status,
-    check_id,
-    run_checks,
-)
 from .fsm import (  # noqa: F401
     STATE_FAILED,
     STATE_GAVE_UP,
@@ -22,8 +15,6 @@ from .model import (  # noqa: F401
     DEFAULT_ACTION_SAFETY,
     DEFAULT_POLICY,
     GuardConfigError,
-    build_network_guard,
-    migrate_config,
     normalize_guard,
     validate_guards,
 )

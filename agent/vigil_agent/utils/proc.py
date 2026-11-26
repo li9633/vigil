@@ -43,6 +43,21 @@ def _truncate(text, limit):
     return text[:limit], True
 
 
+class CommandRunner:
+    """可注入的命令执行器：固定默认超时，供 probe / 动作复用。"""
+
+    def __init__(self, default_timeout=DEFAULT_TIMEOUT):
+        self.default_timeout = float(default_timeout)
+
+    def run(self, args, timeout=None, env=None, cwd=None):
+        return run_command(
+            args,
+            timeout=self.default_timeout if timeout is None else timeout,
+            cwd=cwd,
+            env=env,
+        )
+
+
 def run_command(
     args,
     timeout=DEFAULT_TIMEOUT,

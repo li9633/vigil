@@ -1,7 +1,7 @@
-"""Guard（守护项）配置模型与 v1→v2 迁移。
+"""Guard（守护项）配置模型。
 
-Guard 是用户可配置的完整监控单元：基本信息 + 检测条件 + 触发策略 + 恢复动作。
-配置层只负责数据结构、缺省值与校验，检测与状态机分别由 probes / guards.runner 实现。
+Guard 是完整监控单元：`check_refs` + 触发策略 + 恢复动作。
+配置层只负责数据结构、缺省值与校验，检测与状态机由 checks / guards.fsm 实现。
 """
 
 import copy
@@ -11,7 +11,7 @@ import uuid
 BUILTIN_NETWORK_ID = "6f2c1a4e-9b7d-4c3a-8e51-2d4b6a8f0c37"
 BUILTIN_NETWORK_TEMPLATE = "network.up"
 
-# 触发策略缺省值，对应设计文档 13 章
+# 触发策略缺省值，对应设计文档 3.7
 DEFAULT_POLICY = {
     "interval": 30,
     "fail_threshold": 2,
@@ -31,70 +31,15 @@ DEFAULT_ACTION_SAFETY = {
     "maintenance_windows": [],
 }
 
-# 动作库白名单，v1 只允许 L1
+# 动作库白名单，当前只允许 L1
 ALLOWED_ACTIONS = {
     "ifup_wan": {"requires_target": False, "risk": "L1"},
     "restart_service": {"requires_target": True, "risk": "L1"},
 }
 
-KNOWN_PROBES = {"carrier", "pppoe", "route", "dns", "http", "process", "port", "script"}
-
 
 class GuardConfigError(Exception):
     """Guard 配置非法。"""
-
-
-def build_network_guard(config):
-    """按旧 detect/action 配置生成内置网络守护项。"""
-    detect = config.get("detect") or {}
-    action = config.get("action") or {}
-    timeout = detect.get("timeout", 3)
-    urls = detect.get("http_probes") or ["http://connect.rom.miui.com/generate_204"]
-
-    policy = copy.deepcopy(DEFAULT_POLICY)
-    policy["interval"] = int(detect.get("interval", policy["interval"]))
-    policy["fail_threshold"] = int(action.get("failure_threshold", policy["fail_threshold"]))
-    policy["cooldown"] = int(action.get("cooldown_seconds", policy["cooldown"]))
-    policy["max_actions_per_hour"] = int(action.get("max_per_hour", policy["max_actions_per_hour"]))
-
-    return {
-        "id": BUILTIN_NETWORK_ID,
-        "name": "断网自动尝试恢复",
-        "template": BUILTIN_NETWORK_TEMPLATE,
-        "enabled": True,
-        "checks": [
-            {
-                "probe": "carrier",
-                "params": {"device": detect.get("wan_device", "auto")},
-                "role": "root",
-                "timeout": timeout,
-            },
-            {
-                "probe": "pppoe",
-                "params": {"interface": detect.get("wan_interface", "wan")},
-                "depends_on": ["carrier"],
-                "timeout": timeout,
-            },
-            {"probe": "route", "depends_on": ["pppoe"], "timeout": timeout},
-            {
-                "probe": "dns",
-                "params": {"name": detect.get("dns_probe", "www.baidu.com")},
-                "depends_on": ["route"],
-                "timeout": timeout,
-            },
-            {
-                "probe": "http",
-                "params": {"url": list(urls)},
-                "depends_on": ["route"],
-                "timeout": timeout,
-            },
-        ],
-        "policy": policy,
-        "recovery": [
-            {"action": "ifup_wan", "verify_after": 20, "continue_on_failure": False}
-        ],
-        "limits": {"max_risk_level": "L1"},
-    }
 
 
 def _normalize_policy(raw):
@@ -106,69 +51,32 @@ def _normalize_policy(raw):
     return policy
 
 
-def normalize_guard(raw, base_config=None):
+def normalize_guard(raw):
     """补齐缺省字段，返回深拷贝；不修改入参。"""
     if not isinstance(raw, dict):
         raise GuardConfigError("Guard 必须是对象")
     guard = copy.deepcopy(raw)
 
-    if not guard.get("id"):
-        guard["id"] = str(uuid.uuid4())
-    if not guard.get("name"):
-        guard["name"] = "未命名守护项"
-    guard.setdefault("template", "")
-    guard.setdefault("enabled", True)
+    guard["id"] = str(guard.get("id") or uuid.uuid4())
+    guard["name"] = str(guard.get("name") or "未命名守护项")
+    guard["template"] = str(guard.get("template") or "")
+    guard["enabled"] = bool(guard.get("enabled", True))
     guard["policy"] = _normalize_policy(guard.get("policy"))
-    guard.setdefault("checks", [])
-    guard.setdefault("recovery", [])
-    guard.setdefault("limits", {"max_risk_level": "L1"})
+
+    refs = guard.get("check_refs")
+    guard["check_refs"] = [str(item) for item in refs] if isinstance(refs, list) else []
+
     evaluate = {"mode": "dependency_tree", "quorum": 1}
     if isinstance(guard.get("evaluate"), dict):
         evaluate.update(guard["evaluate"])
     guard["evaluate"] = evaluate
 
-    if not guard["checks"] and guard.get("template") == BUILTIN_NETWORK_TEMPLATE:
-        guard["checks"] = build_network_guard(base_config or {})["checks"]
-    if not guard["recovery"]:
-        guard["recovery"] = [
-            {"action": "ifup_wan", "verify_after": 20, "continue_on_failure": False}
-        ]
+    recovery = guard.get("recovery")
+    guard["recovery"] = list(recovery) if isinstance(recovery, list) else []
+    guard["limits"] = guard.get("limits") if isinstance(guard.get("limits"), dict) else {
+        "max_risk_level": "L1"
+    }
     return guard
-
-
-def migrate_config(config):
-    """就地迁移到 schema 2，返回同一对象。
-
-    - 已有 guards 的配置只做补齐
-    - schema 1 或缺少 guards 时，由 detect/action 生成内置网络守护项
-    - action_safety 由旧的 action 安全上限映射
-    """
-    if not isinstance(config, dict):
-        raise GuardConfigError("配置根节点必须是对象")
-
-    was_v1 = config.get("schema_version") != 2
-    guards = config.get("guards")
-    if not isinstance(guards, list) or not guards:
-        guards = [build_network_guard(config)]
-    config["guards"] = [normalize_guard(item, config) for item in guards]
-
-    safety = config.get("action_safety")
-    if was_v1 or not isinstance(safety, dict):
-        action = config.get("action") or {}
-        safety = copy.deepcopy(DEFAULT_ACTION_SAFETY)
-        safety["global_enabled"] = bool(action.get("enabled", True))
-        safety["max_risk_level"] = str(action.get("max_level", "L1"))
-        safety["max_actions_per_hour"] = int(
-            action.get("max_per_hour", safety["max_actions_per_hour"])
-        )
-        config["action_safety"] = safety
-    else:
-        merged = copy.deepcopy(DEFAULT_ACTION_SAFETY)
-        merged.update(safety)
-        config["action_safety"] = merged
-
-    config["schema_version"] = 2
-    return config
 
 
 def _is_int(value):
@@ -189,10 +97,10 @@ def _validate_uuid(value, errors, where):
         errors.append("%s 必须是 UUIDv4 或 UUIDv5" % where)
 
 
-def validate_guards(config, errors=None):
-    """校验 guards 与 action_safety，把错误追加到 errors 并返回该列表。
+def validate_guards(config, errors=None, checks=None):
+    """校验 guards、action_safety 与 check_refs 引用。
 
-    action_safety 缺省时跳过，便于只校验服务端/本地下发的 guards 片段。
+    checks 未显式传入时使用 config["checks"]；两者都没有时跳过引用存在性校验。
     """
     if errors is None:
         errors = []
@@ -200,6 +108,17 @@ def validate_guards(config, errors=None):
     if not isinstance(guards, list) or not guards:
         errors.append("guards 必须是非空数组")
         return errors
+
+    if checks is None:
+        candidate = config.get("checks")
+        checks = candidate if isinstance(candidate, list) else None
+    available = None
+    if checks is not None:
+        available = {
+            str(item.get("id"))
+            for item in checks
+            if isinstance(item, dict) and item.get("id")
+        }
 
     seen_ids = set()
     seen_templates = set()
@@ -230,39 +149,20 @@ def validate_guards(config, errors=None):
         if not isinstance(guard.get("enabled", True), bool):
             errors.append("%s.enabled 必须是布尔值" % where)
 
-        checks = guard.get("checks")
-        if not isinstance(checks, list) or not checks:
-            errors.append("%s.checks 必须是非空数组" % where)
+        refs = guard.get("check_refs")
+        if not isinstance(refs, list) or not refs:
+            errors.append("%s.check_refs 必须是非空数组" % where)
         else:
-            check_ids = set()
-            for c_index, check in enumerate(checks):
-                c_where = "%s.checks[%d]" % (where, c_index)
-                if not isinstance(check, dict):
-                    errors.append("%s 必须是对象" % c_where)
+            local_seen = set()
+            for ref in refs:
+                if not isinstance(ref, str) or not ref.strip():
+                    errors.append("%s.check_refs 必须是字符串数组" % where)
                     continue
-                probe = check.get("probe")
-                if not isinstance(probe, str) or not probe.strip():
-                    errors.append("%s.probe 必须是非空字符串" % c_where)
-                params = check.get("params", {})
-                if not isinstance(params, dict):
-                    errors.append("%s.params 必须是对象" % c_where)
-                timeout = check.get("timeout")
-                if timeout is not None and (
-                    not _is_number(timeout) or not 0 < float(timeout) <= 60
-                ):
-                    errors.append("%s.timeout 必须是 (0, 60] 的数值" % c_where)
-                check_id = check.get("id") or probe
-                if not isinstance(check_id, str):
-                    errors.append("%s.id 必须是字符串" % c_where)
-                elif check_id in check_ids:
-                    errors.append("%s.id 重复：%s" % (c_where, check_id))
-                else:
-                    check_ids.add(check_id)
-                deps = check.get("depends_on", [])
-                if not isinstance(deps, list) or not all(
-                    isinstance(item, str) for item in deps
-                ):
-                    errors.append("%s.depends_on 必须是字符串数组" % c_where)
+                if ref in local_seen:
+                    errors.append("%s.check_refs 重复：%s" % (where, ref))
+                local_seen.add(ref)
+                if available is not None and ref not in available:
+                    errors.append("%s.check_refs 引用了不存在的检测项：%s" % (where, ref))
 
         policy = guard.get("policy")
         if not isinstance(policy, dict):

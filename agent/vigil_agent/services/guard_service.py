@@ -4,20 +4,19 @@ import copy
 import logging
 import time
 
+from ..checks.model import check_map, dependency_closure, dependency_graph
+from ..checks.runner import STATUS_SKIPPED, CheckRunner, aggregate_status
 from ..config import save_config
-from ..detect.base import STATUS_SKIPPED, CommandRunner
-from ..guards import aggregate_status, run_checks, validate_guards
+from ..guards.model import normalize_guard, validate_guards
 from ..logstore import log_event
+from ..utils.proc import CommandRunner
 
 LOGGER = logging.getLogger("vigil.agent")
 
 
-def detect_loop_interval(config, guards):
-    """计算 detect 调度节拍：旧 detect.interval 与启用 Guard 间隔的最小值。"""
-    try:
-        intervals = [int(config["detect"]["interval"])]
-    except (KeyError, TypeError, ValueError):
-        intervals = [30]
+def detect_loop_interval(guards):
+    """计算 detect 调度节拍：所有启用 Guard 间隔的最小值。"""
+    intervals = []
     for guard in guards or []:
         if not guard.get("enabled", True):
             continue
@@ -27,19 +26,41 @@ def detect_loop_interval(config, guards):
             value = 0
         if value > 0:
             intervals.append(value)
-    return min(intervals)
+    return min(intervals) if intervals else 30
 
 
-def evaluate_guards(guards, config, fsm, last_run, now=None, previous=None):
+def run_guard_checks(guard, checks, registry, config, runner=None):
+    """执行 Guard 引用集合的传递依赖闭包，返回 {check_id: result}。"""
+    by_id = check_map(checks)
+    graph = dependency_graph(checks)
+    roots = [str(item) for item in guard.get("check_refs") or []]
+    ids = dependency_closure(roots, graph) if roots else list(by_id)
+    selected = [by_id[item] for item in ids if item in by_id]
+    if not selected:
+        return {}
+    return CheckRunner(registry, config, runner=runner).run(selected)
+
+
+def evaluate_guards(
+    guards,
+    checks,
+    config,
+    registry,
+    fsm,
+    last_run,
+    now=None,
+    previous=None,
+):
     """执行到期的 Guard Check，并推进各自的状态机。
 
     每个 Guard 按 policy.interval 节流；未到期时沿用上一轮快照，
-    既保证心跳中的状态连续，也避免重复探测。
+    既保证心跳中的状态连续，也避免重复探测。返回 (snapshots, fresh_results)。
     """
     now = float(now if now is not None else time.time())
     previous = previous or {}
-    runner = CommandRunner()
+    command_runner = CommandRunner()
     snapshots = {}
+    fresh = {}
     for guard in guards:
         guard_id = str(guard.get("id"))
         name = guard.get("name") or guard_id
@@ -62,20 +83,29 @@ def evaluate_guards(guards, config, fsm, last_run, now=None, previous=None):
             snapshots[guard_id] = cached
             continue
 
-        checks = run_checks(guard, config, runner=runner)
-        check_status = aggregate_status(checks, guard.get("evaluate"))
+        results = run_guard_checks(
+            guard, checks, registry, config, runner=command_runner
+        )
+        fresh.update(results)
+        check_status = aggregate_status(
+            results, guard.get("evaluate"), guard.get("check_refs"), checks
+        )
         fsm_state = fsm.process(guard, check_status, now=now)
         if LOGGER.isEnabledFor(logging.DEBUG):
-            for check in checks.values():
+            for result in results.values():
                 log_event(
                     "debug",
                     "guard.check",
                     "Check 结果",
-                    guard={"id": guard_id, "name": name, "template": guard.get("template", "")},
-                    check={"id": check.get("id"), "probe": check.get("probe")},
-                    status=check.get("status"),
-                    latency_ms=check.get("latency_ms"),
-                    evidence=check.get("evidence"),
+                    guard={
+                        "id": guard_id,
+                        "name": name,
+                        "template": guard.get("template", ""),
+                    },
+                    check={"id": result.get("check_id"), "probe": result.get("probe")},
+                    status=result.get("status"),
+                    latency_ms=result.get("latency_ms"),
+                    evidence=result.get("evidence"),
                 )
         snapshots[guard_id] = {
             "id": guard_id,
@@ -88,10 +118,10 @@ def evaluate_guards(guards, config, fsm, last_run, now=None, previous=None):
             "recovery_rounds": fsm_state["recovery_rounds"],
             "rearm_at": fsm_state["rearm_at"],
             "last_recovery_id": str(fsm.snapshot(guard_id).get("last_recovery_id", "")),
-            "checks": checks,
+            "checks": results,
         }
         last_run[guard_id] = now
-    return snapshots
+    return snapshots, fresh
 
 
 def build_guards(app):
@@ -103,11 +133,13 @@ def build_guards(app):
     }
 
 
-def validate_local_guards(guards):
-    """校验本地提交的 Guard 列表，返回深拷贝副本。"""
-    candidate = copy.deepcopy(guards)
+def validate_local_guards(guards, checks):
+    """校验本地提交的 Guard 列表，返回规范化副本。"""
+    if not isinstance(guards, list):
+        raise ValueError("guards 必须是数组")
+    candidate = [normalize_guard(item) for item in guards]
     errors = []
-    validate_guards({"guards": candidate}, errors)
+    validate_guards({"guards": candidate}, errors, checks=checks)
     if errors:
         raise ValueError("；".join(errors))
     return candidate
@@ -117,19 +149,16 @@ def update_local_guards(app, guards):
     """PUT /api/guards：本地整表替换 Guard 配置并立即生效。"""
     if app.guards_source == "server":
         raise ValueError("managed_by_server")
-    if not isinstance(guards, list):
-        raise ValueError("guards 必须是数组")
 
-    candidate = validate_local_guards(guards)
+    candidate = validate_local_guards(guards, app.checks)
     with app._detect_lock:
         app.config["guards"] = copy.deepcopy(candidate)
         app.guards = copy.deepcopy(candidate)
         app.guards_source = "local"
         app._server_guards = None
         app._guard_last_run.clear()
-        app.scheduler.update_interval(
-            "detect", detect_loop_interval(app.config, app.guards)
-        )
+        app.detect_interval = detect_loop_interval(app.guards)
+        app.scheduler.update_interval("detect", app.detect_interval)
 
     save_config(app.config, app.config_path)
     app._record_event(
@@ -151,7 +180,9 @@ def update_local_guards(app, guards):
     return candidate
 
 
-def plan_server_guards(server_config, local_guards, current_source, current_server_guards):
+def plan_server_guards(
+    server_config, local_guards, current_source, current_server_guards, checks
+):
     """计算服务端下发 guards 的应用方案。
 
     返回 (decision, errors)：
@@ -160,14 +191,17 @@ def plan_server_guards(server_config, local_guards, current_source, current_serv
     """
     raw = server_config.get("guards") if isinstance(server_config, dict) else None
     if isinstance(raw, list):
+        candidate = [
+            normalize_guard(item) if isinstance(item, dict) else item for item in raw
+        ]
         errors = []
-        validate_guards({"guards": raw}, errors)
+        validate_guards({"guards": candidate}, errors, checks=checks)
         if errors:
             return None, errors
         return {
-            "guards": copy.deepcopy(raw),
+            "guards": candidate,
             "source": "server",
-            "server_guards": copy.deepcopy(raw),
+            "server_guards": copy.deepcopy(candidate),
         }, []
 
     if current_source == "local" and current_server_guards is None:

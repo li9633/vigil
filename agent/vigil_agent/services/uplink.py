@@ -84,10 +84,10 @@ def heartbeat_once(app):
     result = app.transport.heartbeat(
         app.spool.next_seq(persist=False),
         read_uptime(),
-        modules=views.modules_snapshot(app.engine, checks),
+        modules=views.modules_snapshot(app, checks),
         guards=guard_service.heartbeat_payload(app.state.snapshot_guards()),
         spool={"pending": stats["pending"], "dropped": stats["dropped"]},
-        wan_ip=views.wan_ip(checks),
+        wan_ip=views.wan_ip(app, checks),
     )
     if result.get("ok"):
         app.state.last_heartbeat = time.time()
@@ -170,6 +170,7 @@ def apply_server_guards(app, server_config):
         app.config.get("guards") or [],
         app.guards_source,
         app._server_guards,
+        app.checks,
     )
     if errors:
         log_event(
@@ -188,9 +189,8 @@ def apply_server_guards(app, server_config):
         app.guards_source = decision["source"]
         app._server_guards = decision["server_guards"]
         app._guard_last_run.clear()
-        app.scheduler.update_interval(
-            "detect", guard_service.detect_loop_interval(app.config, app.guards)
-        )
+        app.detect_interval = guard_service.detect_loop_interval(app.guards)
+        app.scheduler.update_interval("detect", app.detect_interval)
     log_event(
         "info",
         "guard_config.apply",
