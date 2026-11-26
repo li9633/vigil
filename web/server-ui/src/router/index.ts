@@ -59,6 +59,12 @@ const router = createRouter({
           meta: { title: '策略配置' },
         },
         {
+          path: 'system',
+          name: 'system-settings',
+          component: () => import('@/views/SystemSettingsView.vue'),
+          meta: { title: '系统设置' },
+        },
+        {
           path: 'audit',
           name: 'audit',
           component: () => import('@/views/AuditView.vue'),

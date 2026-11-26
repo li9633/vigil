@@ -33,7 +33,10 @@ const groups: NavGroup[] = [
   },
   {
     title: '系统',
-    items: [{ to: '/logs', label: '服务端日志' }],
+    items: [
+      { to: '/system', label: '系统设置' },
+      { to: '/logs', label: '服务端日志' },
+    ],
   },
 ]
 

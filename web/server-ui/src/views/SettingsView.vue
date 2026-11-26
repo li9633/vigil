@@ -177,33 +177,10 @@ onMounted(load)
             />
           </label>
         </div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-body">
-        <h3 class="section-title">数据保留与磁盘水位</h3>
-        <p class="section-sub">保留天数仅影响心跳/beacon/事件明细；磁盘使用率超过阈值时发送系统告警。</p>
-        <div class="grid">
-          <label class="field">
-            <span class="field-label">明细保留（天，0 为不清理）</span>
-            <el-input-number v-model="form.retention_days" :min="0" :max="3650" size="small" />
-          </label>
-          <label class="field">
-            <span class="field-label">磁盘告警阈值（%）</span>
-            <el-input-number v-model="form.disk_alert_percent" :min="50" :max="99" size="small" />
-          </label>
-          <label class="field">
-            <span class="field-label">磁盘告警冷却（秒）</span>
-            <el-input-number
-              v-model="form.disk_alert_cooldown_seconds"
-              :min="300"
-              :max="86400"
-              :step="300"
-              size="small"
-            />
-          </label>
-        </div>
+        <p class="section-hint">
+          数据保留与磁盘水位已移至
+          <router-link class="panel-link" to="/system">系统设置</router-link>。
+        </p>
       </div>
     </section>
   </div>
@@ -246,5 +223,15 @@ onMounted(load)
 .field-label {
   color: var(--vigil-color-text-muted);
   font-size: var(--vigil-font-sm);
+}
+
+.section-hint {
+  margin: var(--vigil-space-3) 0 0;
+  font-size: var(--vigil-font-xs);
+  color: var(--vigil-color-text-muted);
+}
+
+.panel-link {
+  color: var(--vigil-color-primary);
 }
 </style>

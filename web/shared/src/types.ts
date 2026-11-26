@@ -601,6 +601,23 @@ export interface PolicyResponse {
   defaults: PolicySettings
 }
 
+/** 系统设置（GET /api/v1/admin/system） */
+export interface AdminSystemSettings {
+  admin_username: string
+  password_source: 'env' | 'database'
+  password_updated_at?: string | null
+  retention_days: number
+  disk_alert_percent: number
+  disk_alert_cooldown_seconds: number
+}
+
+export interface RotateSecretResponse {
+  client_id: string
+  /** 明文 secret，仅在轮换响应中返回一次 */
+  secret: string
+  rotated_at: string
+}
+
 /** 客户端本地设置 */
 export interface ClientSettings {
   server_base_url?: string | null

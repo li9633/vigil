@@ -45,9 +45,16 @@ from app.policies import (
     save_policies,
 )
 from app.schemas import LoginRequest, NotificationTestRequest, iso_utc
-from app.security import constant_time_equals
+from app.security import constant_time_equals, hash_secret, new_client_secret
 from app.settings import Settings, settings_from_app
 from app.state_machine import CATEGORY_AGENT_DOWN, CATEGORY_HOST_OR_NET_DOWN
+from app.system_settings import (
+    MAX_PASSWORD_LENGTH,
+    MIN_PASSWORD_LENGTH,
+    admin_auth_state,
+    set_admin_password,
+    verify_admin_password,
+)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -322,7 +329,7 @@ def login(
         )
 
     valid = constant_time_equals(payload.username, settings.admin_username) and (
-        constant_time_equals(payload.password, settings.admin_password)
+        verify_admin_password(db, settings.admin_password, payload.password)
     )
     if not valid:
         _record_login_failure(client_key, now)
@@ -954,6 +961,102 @@ def update_policies(
     return {
         "policies": policies,
         "defaults": default_policies(settings),
+    }
+
+
+# --------------------------------------------------------------------------
+# 系统设置：管理员密码与客户端密钥轮换
+# --------------------------------------------------------------------------
+
+
+@router.get("/system")
+def get_system_settings(
+    db: Session = Depends(get_session),
+    settings: Settings = Depends(settings_from_app),
+    _actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    effective = effective_settings(db, settings)
+    state = admin_auth_state(db)
+    return {
+        "admin_username": settings.admin_username,
+        "password_source": state["source"],
+        "password_updated_at": state["updated_at"],
+        "retention_days": effective.retention_days,
+        "disk_alert_percent": effective.disk_alert_percent,
+        "disk_alert_cooldown_seconds": effective.disk_alert_cooldown_seconds,
+    }
+
+
+@router.put("/system/admin-password")
+def update_admin_password(
+    payload: dict[str, Any] = Body(...),
+    db: Session = Depends(get_session),
+    settings: Settings = Depends(settings_from_app),
+    actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    current = str(payload.get("current_password") or "")
+    new_password = str(payload.get("new_password") or "")
+    if not verify_admin_password(db, settings.admin_password, current):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确"
+        )
+    if not MIN_PASSWORD_LENGTH <= len(new_password) <= MAX_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"新密码长度需在 {MIN_PASSWORD_LENGTH}-{MAX_PASSWORD_LENGTH} 位之间",
+        )
+    if current == new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同"
+        )
+
+    record = set_admin_password(db, new_password)
+    db.add(
+        AuditLog(
+            actor=actor,
+            action="update_admin_password",
+            target="admin",
+            ts=utcnow(),
+            detail=json.dumps({"source": "database"}, ensure_ascii=False),
+        )
+    )
+    db.commit()
+    log_event("warn", "auth.admin.password", "管理员密码已更新", actor=actor)
+    return {
+        "ok": True,
+        "password_source": "database",
+        "password_updated_at": record.get("updated_at"),
+    }
+
+
+@router.post("/clients/{client_id}/secret/rotate")
+def rotate_client_secret(
+    client_id: str,
+    db: Session = Depends(get_session),
+    actor: str = Depends(require_admin),
+) -> dict[str, Any]:
+    """轮换客户端 secret，明文仅在本次响应中返回一次。"""
+    client = _require_client_row(db, client_id)
+    secret = new_client_secret()
+    client.secret_sha256 = hash_secret(secret)
+    rotated_at = utcnow()
+    db.add(
+        AuditLog(
+            actor=actor,
+            action="rotate_client_secret",
+            target=client_id,
+            ts=rotated_at,
+            detail=json.dumps({"client_id": client_id}, ensure_ascii=False),
+        )
+    )
+    db.commit()
+    log_event(
+        "warn", "auth.client.rotate", "客户端 secret 已轮换", client_id=client_id, actor=actor
+    )
+    return {
+        "client_id": client_id,
+        "secret": secret,
+        "rotated_at": iso_utc(rotated_at),
     }
 
 

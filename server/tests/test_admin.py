@@ -31,6 +31,9 @@ def test_admin_endpoints_require_login(client: TestClient) -> None:
     assert client.get("/api/v1/admin/audit/export").status_code == 401
     assert client.get("/api/v1/admin/policies").status_code == 401
     assert client.put("/api/v1/admin/policies", json={}).status_code == 401
+    assert client.get("/api/v1/admin/system").status_code == 401
+    assert client.put("/api/v1/admin/system/admin-password", json={}).status_code == 401
+    assert client.post("/api/v1/admin/clients/cl_x/secret/rotate").status_code == 401
 
 
 def test_admin_login_rejects_wrong_password(client: TestClient) -> None:
@@ -338,3 +341,82 @@ def test_admin_event_stream_emits_update_and_stops(
     assert "event: ready" in frames[1]
     assert "event: update" in update
     assert '"changed": ["incidents"]' in update
+
+
+def test_admin_system_settings(client: TestClient) -> None:
+    assert _login(client).status_code == 200
+    data = client.get("/api/v1/admin/system").json()
+    assert data["admin_username"] == "admin"
+    assert data["password_source"] == "env"
+    assert data["password_updated_at"] is None
+    assert data["retention_days"] >= 0
+    assert 50 <= data["disk_alert_percent"] <= 99
+
+
+def test_admin_password_change_overrides_env(client: TestClient) -> None:
+    assert _login(client).status_code == 200
+
+    wrong = client.put(
+        "/api/v1/admin/system/admin-password",
+        json={"current_password": "bad", "new_password": "new-pass-123"},
+    )
+    assert wrong.status_code == 400
+
+    short = client.put(
+        "/api/v1/admin/system/admin-password",
+        json={"current_password": "test-pass", "new_password": "short"},
+    )
+    assert short.status_code == 400
+
+    changed = client.put(
+        "/api/v1/admin/system/admin-password",
+        json={"current_password": "test-pass", "new_password": "new-pass-123"},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["password_source"] == "database"
+    assert changed.json()["password_updated_at"]
+
+    system = client.get("/api/v1/admin/system").json()
+    assert system["password_source"] == "database"
+
+    # 数据库覆盖后，环境变量密码失效，新密码可登录
+    assert _login(client, password="test-pass").status_code == 401
+    assert _login(client, password="new-pass-123").status_code == 200
+
+    audit = client.get(
+        "/api/v1/admin/audit", params={"action": "update_admin_password"}
+    ).json()
+    assert audit["total"] == 1
+
+
+def test_rotate_client_secret(
+    client: TestClient,
+    registered: dict[str, Any],
+    auth: Callable[..., dict[str, str]],
+) -> None:
+    assert _login(client).status_code == 200
+    client_id = registered["client_id"]
+    old_secret = registered["secret"]
+
+    rotated = client.post(f"/api/v1/admin/clients/{client_id}/secret/rotate")
+    assert rotated.status_code == 200
+    data = rotated.json()
+    new_secret = data["secret"]
+    assert new_secret and new_secret != old_secret
+    assert data["rotated_at"].endswith("Z")
+
+    def beacon(secret: str) -> Any:
+        return client.post(
+            "/api/v1/beacon",
+            headers=auth(client_id, secret),
+            json={"client_id": client_id, "seq": 1, "boot_id": "boot-1", "uptime": 10},
+        )
+
+    assert beacon(old_secret).status_code == 401
+    assert beacon(new_secret).status_code == 200
+
+    assert client.post("/api/v1/admin/clients/cl_missing/secret/rotate").status_code == 404
+    audit = client.get(
+        "/api/v1/admin/audit", params={"action": "rotate_client_secret"}
+    ).json()
+    assert audit["total"] == 1

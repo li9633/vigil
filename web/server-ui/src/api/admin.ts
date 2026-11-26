@@ -1,4 +1,4 @@
-import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type AuditQuery, type AuditResponse, type Client, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type PolicyResponse, type PolicySettings, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
+import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type AdminSystemSettings, type AuditQuery, type AuditResponse, type Client, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type PolicyResponse, type PolicySettings, type RotateSecretResponse, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
 
 export interface IncidentQuery {
   state?: string
@@ -67,6 +67,19 @@ export const adminApi = {
 
   savePolicies: (policies: Partial<PolicySettings>) =>
     api.put<PolicyResponse>('/api/v1/admin/policies', policies),
+
+  system: () => api.get<AdminSystemSettings>('/api/v1/admin/system'),
+
+  changeAdminPassword: (payload: { current_password: string; new_password: string }) =>
+    api.put<{ ok: boolean; password_source: string; password_updated_at: string | null }>(
+      '/api/v1/admin/system/admin-password',
+      payload,
+    ),
+
+  rotateClientSecret: (id: string) =>
+    api.post<RotateSecretResponse>(
+      `/api/v1/admin/clients/${encodeURIComponent(id)}/secret/rotate`,
+    ),
 
   auditExportUrl: (query: AuditQuery = {}) => {
     const params = new URLSearchParams()

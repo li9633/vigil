@@ -10,6 +10,7 @@ import {
   RefreshFab,
   StatusTag,
   TimeText,
+  copyText,
   formatDuration,
   formatLatency,
   getErrorMessage,
@@ -143,6 +144,40 @@ const poll = usePolling(load, {
   interval: 15000,
   isError: () => Boolean(error.value),
 })
+
+const rotating = ref(false)
+const secretDialogOpen = ref(false)
+const rotatedSecret = ref('')
+
+async function rotateSecret() {
+  if (!clientId.value || rotating.value) return
+  try {
+    await ElMessageBox.confirm(
+      '轮换后旧 secret 立即失效，客户端会认证失败，直到在设备上更新为新 secret。新 secret 只显示一次，确定继续？',
+      '轮换客户端 secret',
+      { type: 'warning', confirmButtonText: '轮换', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  rotating.value = true
+  try {
+    const result = await adminApi.rotateClientSecret(clientId.value)
+    rotatedSecret.value = result.secret
+    secretDialogOpen.value = true
+    ElMessage.success('secret 已轮换')
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '轮换失败'))
+  } finally {
+    rotating.value = false
+  }
+}
+
+async function copyRotatedSecret() {
+  const ok = await copyText(rotatedSecret.value)
+  if (ok) ElMessage.success('已复制到剪贴板')
+  else ElMessage.warning('复制失败，请手动选中复制')
+}
 </script>
 
 <template>
@@ -215,6 +250,20 @@ const poll = usePolling(load, {
               <dd class="mono">{{ client.boot_id || '—' }}</dd>
             </div>
           </dl>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <span class="panel-title">访问凭证</span>
+          <el-button size="small" :loading="rotating" @click="rotateSecret">
+            轮换 secret
+          </el-button>
+        </div>
+        <div class="panel-body">
+          <p class="muted secret-hint">
+            secret 仅以哈希形式保存，服务端无法查看明文。轮换后需同步修改设备配置，否则该客户端会认证失败。
+          </p>
         </div>
       </div>
 
@@ -492,6 +541,28 @@ const poll = usePolling(load, {
       @save="handleGuardSave"
     />
 
+    <el-dialog
+      v-model="secretDialogOpen"
+      title="新的客户端 secret"
+      width="520px"
+      :close-on-click-modal="false"
+      @closed="rotatedSecret = ''"
+    >
+      <el-alert
+        type="warning"
+        show-icon
+        :closable="false"
+        title="仅显示一次，请立即复制并更新到设备配置"
+      />
+      <div class="secret-row">
+        <el-input :model-value="rotatedSecret" readonly class="mono" />
+        <el-button size="small" type="primary" @click="copyRotatedSecret">复制</el-button>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="secretDialogOpen = false">我已保存</el-button>
+      </template>
+    </el-dialog>
+
     <RefreshFab
       :loading="poll.refreshing"
       :paused="poll.paused"
@@ -613,5 +684,17 @@ const poll = usePolling(load, {
 .guard-hint {
   margin: 0;
   font-size: var(--vigil-font-xs);
+}
+
+.secret-hint {
+  margin: 0;
+  font-size: var(--vigil-font-xs);
+}
+
+.secret-row {
+  display: flex;
+  align-items: center;
+  gap: var(--vigil-space-2);
+  margin-top: var(--vigil-space-3);
 }
 </style>

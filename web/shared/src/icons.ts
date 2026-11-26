@@ -61,6 +61,7 @@ export const navIcons: Record<string, IconDefinition> = {
   告警中心: faTriangleExclamation,
   通知配置: faBell,
   策略配置: faSliders,
+  系统设置: faGear,
   审计日志: faClipboardList,
   服务端日志: faTerminal,
   状态: faHeartPulse,
