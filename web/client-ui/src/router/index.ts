@@ -29,6 +29,12 @@ const router = createRouter({
           meta: { title: '状态' },
         },
         {
+          path: 'probes',
+          name: 'probes',
+          component: () => import('@/views/ProbesView.vue'),
+          meta: { title: '探测器' },
+        },
+        {
           path: 'guards',
           name: 'guards',
           component: () => import('@/views/GuardsView.vue'),

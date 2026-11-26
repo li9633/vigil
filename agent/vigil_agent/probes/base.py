@@ -124,6 +124,7 @@ class DetectContext:
         params=None,
         timeout=None,
         cache=None,
+        check_id="",
     ):
         self.config = config if isinstance(config, dict) else {}
         self.runner = runner or CommandRunner()
@@ -133,9 +134,19 @@ class DetectContext:
         self.params = params if isinstance(params, dict) else {}
         self.timeout = float(timeout if timeout is not None else DEFAULT_TIMEOUT)
         self.cache = cache if cache is not None else {}
+        self.check_id = str(check_id or "")
 
-    def run(self, args, timeout=None, env=None, cwd=None):
-        return self.runner.run(args, timeout=timeout or self.timeout, env=env, cwd=cwd)
+    def run(self, args, timeout=None, env=None, cwd=None, input_text=None):
+        kwargs = {}
+        if input_text is not None:
+            kwargs["input_text"] = input_text
+        return self.runner.run(
+            args,
+            timeout=timeout or self.timeout,
+            env=env,
+            cwd=cwd,
+            **kwargs
+        )
 
     def param(self, key, default=None):
         if key in self.params and self.params[key] is not None:

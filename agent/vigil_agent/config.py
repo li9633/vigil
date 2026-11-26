@@ -22,6 +22,7 @@ from .guards.model import (
     validate_guards,
 )
 from .probes.builtin import builtin_registry
+from .probes.loader import DEFAULT_PROBES_DIR, LocalProbeStore
 
 LOGGER = logging.getLogger(__name__)
 
@@ -116,6 +117,10 @@ DEFAULT_CONFIG = {
     "checks": copy.deepcopy(DEFAULT_CHECKS),
     "guards": copy.deepcopy(DEFAULT_GUARDS),
     "action_safety": copy.deepcopy(DEFAULT_ACTION_SAFETY),
+    # 本地 probe 包目录（内置 probe 之外的自定义探测器）
+    "probes": {
+        "dir": DEFAULT_PROBES_DIR,
+    },
     # 动作运行时参数（非安全天花板，天花板在 action_safety）
     "action": {
         "cooldown_seconds": 300,
@@ -189,6 +194,7 @@ ENV_MAP = (
     ("VIGIL_ACTION_ENABLED", "action_safety", "global_enabled", "bool"),
     ("VIGIL_ACTION_MAX_LEVEL", "action_safety", "max_risk_level", "str"),
     ("VIGIL_ACTION_MAX_PER_HOUR", "action_safety", "max_actions_per_hour", "int"),
+    ("VIGIL_PROBES_DIR", "probes", "dir", "str"),
     ("VIGIL_ACTION_COOLDOWN_SECONDS", "action", "cooldown_seconds", "int"),
     ("VIGIL_ACTION_ALLOWED_SERVICES", "action", "allowed_services", "list"),
     ("VIGIL_WAN_INTERFACE", "action", "wan_interface", "str"),
@@ -241,9 +247,22 @@ def _check_url(value):
     return parts.scheme in ("http", "https") and bool(parts.netloc)
 
 
+def _registry_for(cfg):
+    """内置 probe + 本地 probe；本地包读取失败时忽略，交由 app 记录告警。"""
+    registry = builtin_registry()
+    probes = cfg.get("probes")
+    directory = probes.get("dir") if isinstance(probes, dict) else None
+    if isinstance(directory, str) and directory:
+        try:
+            LocalProbeStore(directory).load_into(registry)
+        except Exception:
+            pass
+    return registry
+
+
 def _normalize(cfg, errors):
     """就地规范化 checks / guards，便于后续校验与运行。"""
-    registry = builtin_registry()
+    registry = _registry_for(cfg)
     checks = cfg.get("checks")
     if isinstance(checks, list):
         try:
@@ -303,6 +322,12 @@ def validate_config(cfg):
     action_safety = cfg.get("action_safety")
     if not isinstance(action_safety, dict):
         errors.append("action_safety 必须是对象")
+
+    probes = cfg.get("probes")
+    if not isinstance(probes, dict):
+        errors.append("probes 必须是对象")
+    elif not isinstance(probes.get("dir"), str) or not probes.get("dir").strip():
+        errors.append("probes.dir 必须是非空字符串")
 
     action = cfg.get("action")
     if not isinstance(action, dict):

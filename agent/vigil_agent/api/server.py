@@ -30,6 +30,11 @@ class VigilHTTPServer(ThreadingHTTPServer):
         settings_provider=None,
         settings_handler=None,
         logs_export_provider=None,
+        probes_provider=None,
+        probes_install_handler=None,
+        probes_delete_handler=None,
+        probes_test_handler=None,
+        checks_test_handler=None,
     ):
         super().__init__(address, VigilRequestHandler)
         self.token = token or ""
@@ -44,6 +49,11 @@ class VigilHTTPServer(ThreadingHTTPServer):
         self.settings_provider = settings_provider
         self.settings_handler = settings_handler
         self.logs_export_provider = logs_export_provider
+        self.probes_provider = probes_provider
+        self.probes_install_handler = probes_install_handler
+        self.probes_delete_handler = probes_delete_handler
+        self.probes_test_handler = probes_test_handler
+        self.checks_test_handler = checks_test_handler
         self.session_ttl = int(session_ttl)
         self.login_max_failures = int(login_max_failures)
         self.login_window = int(login_window)
@@ -70,6 +80,11 @@ def create_server(
     settings_provider=None,
     settings_handler=None,
     logs_export_provider=None,
+    probes_provider=None,
+    probes_install_handler=None,
+    probes_delete_handler=None,
+    probes_test_handler=None,
+    checks_test_handler=None,
 ):
     """创建（未启动的）HTTP 服务实例。"""
     return VigilHTTPServer(
@@ -89,4 +104,9 @@ def create_server(
         settings_provider=settings_provider,
         settings_handler=settings_handler,
         logs_export_provider=logs_export_provider,
+        probes_provider=probes_provider,
+        probes_install_handler=probes_install_handler,
+        probes_delete_handler=probes_delete_handler,
+        probes_test_handler=probes_test_handler,
+        checks_test_handler=checks_test_handler,
     )

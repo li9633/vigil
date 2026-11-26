@@ -35,6 +35,7 @@ from .guards.model import normalize_guard
 from .guards.recovery import RecoveryRunner
 from .logstore import log_event, set_log_context
 from .probes.builtin import builtin_registry
+from .probes.loader import DEFAULT_PROBES_DIR, LocalProbeStore
 from .runtime import RuntimeState, Watchdog, prepare_storage
 from .scheduler import IntervalScheduler
 from .services import guard_service, uplink, views
@@ -60,7 +61,12 @@ class AgentApp:
         set_log_context(self.transport.client_id, self.transport.boot_id)
         self._log_throttle = {}
         self.executor = ActionExecutor(config)
+        self._detect_lock = threading.Lock()
+        self.probe_store = LocalProbeStore(
+            str((config.get("probes") or {}).get("dir") or DEFAULT_PROBES_DIR)
+        )
         self.registry = builtin_registry()
+        self._reload_probes(log=False)
         self.checks = normalize_checks(list(config.get("checks") or []), self.registry)
         self.guards = [normalize_guard(item) for item in config.get("guards") or []]
         # guards 来源：local=本地编辑；server=服务端下发（本地只读）
@@ -79,7 +85,6 @@ class AgentApp:
         self.scheduler.add("config", int(config["server"]["config_poll_interval"]))
 
         self._stop_event = threading.Event()
-        self._detect_lock = threading.Lock()
         self._httpd = None
         self._httpd_thread = None
         self._watchdog = None
@@ -525,6 +530,49 @@ class AgentApp:
     def api_checks(self):
         return views.build_checks(self)
 
+    def api_probes(self):
+        return views.build_probes(self)
+
+    def api_probe_install(self, data):
+        package = self.probe_store.install(data)
+        self._reload_probes()
+        self._record_event(
+            "probe_installed",
+            "probe",
+            {"id": package.id, "version": package.version, "name": package.name},
+        )
+        log_event(
+            "info",
+            "probe.install",
+            "本地 probe 包已安装",
+            probe={"id": package.id, "version": package.version},
+        )
+        return self.api_probes()
+
+    def api_probe_delete(self, probe_id):
+        self.probe_store.remove(probe_id)
+        self._reload_probes()
+        self._record_event("probe_removed", "probe", {"id": probe_id})
+        log_event("info", "probe.remove", "本地 probe 包已删除", probe_id=probe_id)
+        return self.api_probes()
+
+    def api_probe_test(self, probe_id, params=None, expect=None):
+        return views.run_probe_test(self, probe_id, params, expect)
+
+    def api_check_test(self, check_id):
+        return views.run_check_test(self, check_id)
+
+    def _reload_probes(self, log=True):
+        registry = builtin_registry()
+        errors = self.probe_store.load_into(registry)
+        with self._detect_lock:
+            self.registry = registry
+        for message in errors:
+            LOGGER.warning("本地 probe 包不可用：%s", message)
+            if log:
+                log_event("warn", "probe.invalid", "本地 probe 包不可用", detail=message)
+        return registry
+
     def api_guards(self):
         return guard_service.build_guards(self)
 
@@ -716,6 +764,11 @@ class AgentApp:
                 guards_handler=self.api_guards_update,
                 settings_provider=self.api_settings,
                 settings_handler=self.api_settings_update,
+                probes_provider=self.api_probes,
+                probes_install_handler=self.api_probe_install,
+                probes_delete_handler=self.api_probe_delete,
+                probes_test_handler=self.api_probe_test,
+                checks_test_handler=self.api_check_test,
             )
         except OSError as exc:
             LOGGER.error("本地 HTTP 服务启动失败：%s", exc)

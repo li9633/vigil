@@ -18,6 +18,7 @@ const groups: NavGroup[] = [
     title: '监控',
     items: [
       { to: '/', label: '状态' },
+      { to: '/probes', label: '探测器' },
       { to: '/guards', label: '守护项' },
       { to: '/checks', label: '检测项' },
       { to: '/events', label: '事件' },

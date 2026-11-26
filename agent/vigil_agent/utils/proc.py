@@ -49,12 +49,13 @@ class CommandRunner:
     def __init__(self, default_timeout=DEFAULT_TIMEOUT):
         self.default_timeout = float(default_timeout)
 
-    def run(self, args, timeout=None, env=None, cwd=None):
+    def run(self, args, timeout=None, env=None, cwd=None, input_text=None):
         return run_command(
             args,
             timeout=self.default_timeout if timeout is None else timeout,
             cwd=cwd,
             env=env,
+            input_text=input_text,
         )
 
 
@@ -95,6 +96,8 @@ def run_command(
         "cwd": cwd,
         "env": merged_env,
     }
+    if input_text is not None:
+        popen_kwargs["stdin"] = subprocess.PIPE
     if os.name == "nt":
         popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     else:

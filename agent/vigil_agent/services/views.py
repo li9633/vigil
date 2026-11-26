@@ -9,9 +9,20 @@ import time
 from urllib.parse import urlparse
 
 from .. import PROTOCOL_VERSION
+from ..checks.expect import evaluate
 from ..checks.model import dependency_closure, dependency_graph
-from ..checks.runner import STATUS_CRITICAL, STATUS_OK, STATUS_UNKNOWN
+from ..checks.runner import (
+    STATUS_CRITICAL,
+    STATUS_OK,
+    STATUS_UNKNOWN,
+    CheckRunner,
+)
 from ..logstore import export_log_events, filter_events, read_log_events
+from ..probes.base import (
+    DetectContext,
+    apply_param_defaults,
+    validate_params,
+)
 from ..runtime import (
     STATUS_WARN,
     derive_client_state,
@@ -98,21 +109,20 @@ def build_status(app):
 
 
 def build_checks(app, checks=None):
-    """把检测结果整理成前端 CheckItem 列表。"""
+    """把检测项定义与最近结果整理成前端 CheckItem 列表。"""
     checks = checks if checks is not None else app.state.snapshot_checks()
     items = []
     for check in app.checks:
         cid = check["id"]
-        result = checks.get(cid)
-        if not result:
-            continue
+        result = checks.get(cid) or {}
+        probe_id = check.get("probe") or ""
         items.append(
             {
                 "id": cid,
                 "name": check.get("name") or cid,
-                "layer": check.get("probe") or "",
-                "probe": check.get("probe") or "",
-                "status": result.get("status"),
+                "layer": probe_id,
+                "probe": probe_id,
+                "status": result.get("status") or STATUS_UNKNOWN,
                 "latency_ms": result.get("latency_ms"),
                 "interval": _check_interval(app, cid),
                 "enabled": bool(check.get("enabled", True)),
@@ -120,9 +130,103 @@ def build_checks(app, checks=None):
                 "updated_at": iso_utc(
                     result.get("checked_at") or app.state.last_check_at
                 ),
+                "params": dict(check.get("params") or {}),
+                "expect": dict(check.get("expect") or {}),
+                "timeout": check.get("timeout"),
+                "depends_on": list(check.get("depends_on") or []),
+                "probe_missing": app.registry.get(probe_id) is None,
+                "has_result": bool(result),
             }
         )
     return items
+
+
+def build_probes(app):
+    """GET /api/probes：内置与本地探测器目录。"""
+    items = []
+    for entry in app.registry.catalog():
+        item = dict(entry)
+        item["valid"] = True
+        item["error"] = ""
+        items.append(item)
+
+    known = {item["id"] for item in items}
+    for package in app.probe_store.scan():
+        if package.valid and package.id in known:
+            continue
+        items.append(
+            {
+                "id": package.id,
+                "name": package.name or package.id,
+                "description": package.description,
+                "version": package.version,
+                "source": "local",
+                "remote_allowed": False,
+                "params_schema": {},
+                "default_expect": {},
+                "default_timeout": package.timeout,
+                "valid": False,
+                "error": package.error or "未加载",
+            }
+        )
+    return {"items": items, "directory": app.probe_store.directory}
+
+
+def run_probe_test(app, probe_id, params=None, expect=None):
+    """POST /api/probes/{id}/test：试运行探测器，不写入 Check 状态。"""
+    probe = app.registry.get(probe_id)
+    if probe is None:
+        raise LookupError("probe 不存在：%s" % probe_id)
+
+    values = dict(params) if isinstance(params, dict) else {}
+    errors = validate_params(probe.params_schema, values)
+    if errors:
+        raise ValueError("；".join(errors))
+    values = apply_param_defaults(probe.params_schema, values)
+
+    expected = expect if isinstance(expect, dict) else dict(probe.default_expect)
+    ctx = DetectContext(
+        app.config,
+        params=values,
+        timeout=probe.default_timeout,
+        check_id="test-%s" % probe_id,
+    )
+    observation = probe.observe(ctx, values)
+    status, evidence = evaluate(expected, observation)
+    if observation.error:
+        evidence.setdefault("error", observation.error)
+    return {
+        "probe": probe.catalog_entry(),
+        "params": values,
+        "expect": expected,
+        "status": status,
+        "evidence": evidence,
+        "observation": observation.to_dict(),
+        "latency_ms": observation.latency_ms,
+    }
+
+
+def run_check_test(app, check_id):
+    """POST /api/checks/{id}/test：按定义试运行单个检测项。"""
+    target = None
+    for check in app.checks:
+        if check.get("id") == check_id:
+            target = check
+            break
+    if target is None:
+        raise LookupError("检测项不存在：%s" % check_id)
+
+    results = CheckRunner(app.registry, app.config).run([target])
+    result = results.get(check_id)
+    if result is None:
+        raise LookupError("检测项不存在：%s" % check_id)
+    return {
+        "check": dict(target),
+        "result": result,
+        "status": result.get("status") or STATUS_UNKNOWN,
+        "latency_ms": result.get("latency_ms"),
+        "evidence": result.get("evidence") or {},
+    }
 
 
 def build_settings(app):

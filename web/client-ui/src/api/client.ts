@@ -3,6 +3,7 @@ import {
   getApiConfig,
   type ActionExecuteResponse,
   type CheckItem,
+  type CheckTestResponse,
   type ClientEvent,
   type ClientLoginRequest,
   type ClientStatusSnapshot,
@@ -13,6 +14,8 @@ import {
   type ListResponse,
   type LogEntry,
   type LogQuery,
+  type ProbeCatalogResponse,
+  type ProbeTestResponse,
 } from '@vigil/shared'
 
 export const clientApi = {
@@ -22,6 +25,27 @@ export const clientApi = {
   status: () => api.get<ClientStatusSnapshot>('/api/status'),
 
   checks: () => api.get<ListResponse<CheckItem>>('/api/checks'),
+
+  testCheck: (id: string) =>
+    api.post<CheckTestResponse>(`/api/checks/${encodeURIComponent(id)}/test`, {}, { timeoutMs: 40000 }),
+
+  probes: () => api.get<ProbeCatalogResponse>('/api/probes'),
+
+  installProbe: (file: File) =>
+    api.post<ProbeCatalogResponse>('/api/probes', file, {
+      headers: { 'Content-Type': 'application/gzip' },
+      timeoutMs: 60000,
+    }),
+
+  deleteProbe: (id: string) =>
+    api.delete<ProbeCatalogResponse>(`/api/probes/${encodeURIComponent(id)}`),
+
+  testProbe: (id: string, params: Record<string, unknown>, expect?: Record<string, unknown>) =>
+    api.post<ProbeTestResponse>(
+      `/api/probes/${encodeURIComponent(id)}/test`,
+      { params, expect },
+      { timeoutMs: 40000 },
+    ),
 
   guards: () => api.get<GuardConfigResponse>('/api/guards'),
 

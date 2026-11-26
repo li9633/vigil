@@ -368,7 +368,7 @@ export interface ClientGuardsResponse {
   managed: boolean
 }
 
-/** 检测项（GET /api/checks） */
+/** 检测项（GET /api/checks：定义 + 最近结果） */
 export interface CheckItem {
   id: string
   name?: string | null
@@ -379,6 +379,29 @@ export interface CheckItem {
   enabled?: boolean
   evidence?: string | null
   updated_at?: string | null
+  probe?: string | null
+  params?: Record<string, unknown>
+  expect?: Record<string, unknown>
+  timeout?: number | null
+  depends_on?: string[]
+  /** 引用的 probe 不在当前目录中 */
+  probe_missing?: boolean
+  /** 是否已有最近一次检测结果 */
+  has_result?: boolean
+}
+
+/** 检测项试运行（POST /api/checks/{id}/test） */
+export interface CheckTestResponse {
+  check: CheckItem | Record<string, unknown>
+  result: {
+    check_id?: string
+    status: StatusLevel | string
+    latency_ms?: number | null
+    evidence?: Record<string, unknown> | null
+  }
+  status: StatusLevel | string
+  latency_ms?: number | null
+  evidence: Record<string, unknown>
 }
 
 /** 客户端本地事件（GET /api/events） */
@@ -416,50 +439,53 @@ export interface ActionExecuteResponse {
   message?: string | null
 }
 
-/** 内置探测器信息 */
-export interface ProbeInfo {
+/** 探测器参数描述（manifest.params_schema） */
+export interface ProbeParamSpec {
+  type?: 'string' | 'number' | 'integer' | 'boolean' | 'enum' | string
+  required?: boolean
+  default?: unknown
+  label?: string
+  placeholder?: string
+  values?: Array<string | number>
+}
+
+/** 探测器目录项（内置 / 本地） */
+export interface ProbeCatalogItem {
   id: string
   name?: string | null
   description?: string | null
-  params?: string[]
-}
-
-/** 脚本探测器校验结果 */
-export interface ScriptProbeInfo {
-  name: string
-  file: string
-  sha256?: string | null
-  actual_sha256?: string | null
-  timeout?: number | null
-  valid: boolean
+  version?: string | null
+  source?: 'builtin' | 'local' | string
+  remote_allowed?: boolean
+  params_schema?: Record<string, ProbeParamSpec>
+  default_expect?: Record<string, unknown>
+  default_timeout?: number | null
+  valid?: boolean
   error?: string | null
+  entry?: string | null
+  interpreter?: string | null
+  sha256?: string | null
 }
 
-export interface ScriptProbeInventory {
-  directory: string
-  manifest: string
-  directory_ok: boolean
-  manifest_exists?: boolean
-  error?: string
-  scripts: ScriptProbeInfo[]
-  unregistered: string[]
+/** GET /api/probes */
+export interface ProbeCatalogResponse {
+  items: ProbeCatalogItem[]
+  directory?: string
 }
 
-/** 模块清单（GET /api/modules） */
-export interface ModulesResponse {
-  builtin: ProbeInfo[]
-  scripts: ScriptProbeInventory
-}
-
-export interface ScriptImportResponse {
-  ok: boolean
-  script: ScriptProbeInfo
-  modules: ModulesResponse
-}
-
-export interface ScriptDeleteResponse {
-  ok: boolean
-  modules: ModulesResponse
+/** POST /api/probes/{id}/test */
+export interface ProbeTestResponse {
+  probe: ProbeCatalogItem
+  params: Record<string, unknown>
+  expect: Record<string, unknown>
+  status: StatusLevel | string
+  evidence: Record<string, unknown>
+  observation: {
+    data?: Record<string, unknown>
+    latency_ms?: number | null
+    error?: string | null
+  }
+  latency_ms?: number | null
 }
 
 /** 客户端结构化日志（GET /api/logs） */

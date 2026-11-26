@@ -21,6 +21,12 @@ DEFAULT_EVENT_LIMIT = 50
 MAX_LIMIT = 500
 
 ACTION_PATH_RE = re.compile(r"^/api/actions/([A-Za-z0-9_]+)$")
+PROBE_DELETE_RE = re.compile(r"^/api/probes/([a-z0-9][a-z0-9._-]{0,63})$")
+PROBE_TEST_RE = re.compile(
+    r"^/api/probes/(local\.[a-z0-9][a-z0-9._-]{0,48})/test$"
+)
+CHECK_TEST_RE = re.compile(r"^/api/checks/([a-z0-9][a-z0-9._-]{0,63})/test$")
+MAX_PROBE_PACKAGE_BYTES = 8 * 1024 * 1024
 
 
 class VigilRequestHandler(BaseHTTPRequestHandler):
@@ -54,6 +60,14 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             return
         self._send_json(404, {"error": "not_found"})
 
+    def do_DELETE(self):
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.path.startswith("/api/"):
+            query = urllib.parse.parse_qs(parsed.query)
+            self._handle_api("DELETE", parsed.path, query)
+            return
+        self._send_json(404, {"error": "not_found"})
+
     # ---------- API ----------
 
     def _handle_api(self, method, path, query):
@@ -71,6 +85,30 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/checks":
             self._serve_provider(self.server.checks_provider)
             return
+        if method == "GET" and path == "/api/probes":
+            self._serve_provider(self.server.probes_provider)
+            return
+        if method == "DELETE":
+            match = PROBE_DELETE_RE.match(path)
+            if match:
+                self._handle_probe_delete(match.group(1))
+                return
+        if method == "POST":
+            if path == "/api/probes":
+                self._handle_probe_install()
+                return
+            match = PROBE_TEST_RE.match(path)
+            if match:
+                self._handle_probe_test(match.group(1))
+                return
+            match = CHECK_TEST_RE.match(path)
+            if match:
+                self._handle_check_test(match.group(1))
+                return
+            match = ACTION_PATH_RE.match(path)
+            if match:
+                self._handle_action(match.group(1))
+                return
         if method == "GET" and path == "/api/events":
             limit = _parse_limit(query, DEFAULT_EVENT_LIMIT)
             self._serve_provider(self.server.events_provider, limit)
@@ -93,11 +131,6 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
         if method == "PUT" and path == "/api/settings":
             self._handle_settings_update()
             return
-        if method == "POST":
-            match = ACTION_PATH_RE.match(path)
-            if match:
-                self._handle_action(match.group(1))
-                return
 
         self._send_json(404, {"error": "not_found"})
 
@@ -255,6 +288,125 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             {"ok": True, "expires_in": self.server.session_ttl},
             {"Set-Cookie": cookie},
         )
+
+    def _handle_probe_install(self):
+        """POST /api/probes：上传 tar.gz 安装本地 probe 包。"""
+        handler = self.server.probes_install_handler
+        if handler is None:
+            self._send_json(500, {"error": "probe 安装未启用"})
+            return
+        length = self._content_length()
+        if length <= 0:
+            self._send_json(400, {"error": "请求体为空"})
+            return
+        if length > MAX_PROBE_PACKAGE_BYTES:
+            self._send_json(413, {"error": "probe 包超过允许大小"})
+            return
+        content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if content_type not in (
+            "application/gzip",
+            "application/x-gzip",
+            "application/octet-stream",
+            "",
+        ):
+            self._send_json(400, {"error": "probe 包必须使用 application/gzip"})
+            return
+        data = self.rfile.read(length)
+        if data[:2] != b"\x1f\x8b":
+            self._send_json(400, {"error": "上传内容不是 gzip 压缩包"})
+            return
+        try:
+            payload = handler(data)
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc) or "not_found"})
+            return
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "probe 包非法"})
+            return
+        except Exception:
+            LOGGER.exception("安装本地 probe 包失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_probe_delete(self, probe_id):
+        """DELETE /api/probes/{id}：删除本地 probe 包。"""
+        handler = self.server.probes_delete_handler
+        if handler is None:
+            self._send_json(500, {"error": "probe 删除未启用"})
+            return
+        try:
+            payload = handler(probe_id)
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc) or "not_found"})
+            return
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "probe id 非法"})
+            return
+        except Exception:
+            LOGGER.exception("删除本地 probe 包失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_probe_test(self, probe_id):
+        """POST /api/probes/{id}/test：试运行探测器。"""
+        handler = self.server.probes_test_handler
+        if handler is None:
+            self._send_json(500, {"error": "probe 试运行未启用"})
+            return
+        body = {}
+        if self._content_length():
+            body, error = self._read_json()
+            if error:
+                self._send_json(400, {"error": error})
+                return
+        params = body.get("params")
+        if params is not None and not isinstance(params, dict):
+            self._send_json(400, {"error": "params 必须是对象"})
+            return
+        expect = body.get("expect")
+        if expect is not None and not isinstance(expect, dict):
+            self._send_json(400, {"error": "expect 必须是对象"})
+            return
+        try:
+            payload = handler(probe_id, params, expect)
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc) or "not_found"})
+            return
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "参数非法"})
+            return
+        except Exception:
+            LOGGER.exception("试运行本地 probe 失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_check_test(self, check_id):
+        """POST /api/checks/{id}/test：按定义试运行单个检测项。"""
+        handler = self.server.checks_test_handler
+        if handler is None:
+            self._send_json(500, {"error": "检测项试运行未启用"})
+            return
+        if self._content_length():
+            _body, error = self._read_json()
+            if error:
+                self._send_json(400, {"error": error})
+                return
+        try:
+            payload = handler(check_id)
+        except LookupError as exc:
+            self._send_json(404, {"error": str(exc) or "not_found"})
+            return
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "检测项非法"})
+            return
+        except Exception:
+            LOGGER.exception("试运行检测项失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
 
     def _handle_action(self, name):
         body = {}

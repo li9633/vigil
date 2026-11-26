@@ -114,6 +114,7 @@ class CheckRunner:
                     params=dict(check.get("params") or {}),
                     timeout=float(check.get("timeout") or 5),
                     cache=cache,
+                    check_id=cid,
                 )
                 observation = probe.observe(ctx, dict(check.get("params") or {}))
                 if not isinstance(observation, Observation):
