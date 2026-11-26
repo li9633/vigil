@@ -68,6 +68,22 @@ def init_db() -> None:
             connection.execute(
                 text("ALTER TABLE heartbeats ADD COLUMN guards_json TEXT DEFAULT '{}'")
             )
+        if "checks_json" not in columns:
+            connection.execute(
+                text("ALTER TABLE heartbeats ADD COLUMN checks_json TEXT DEFAULT '{}'")
+            )
+        if "probes_json" not in columns:
+            connection.execute(
+                text("ALTER TABLE heartbeats ADD COLUMN probes_json TEXT DEFAULT '[]'")
+            )
+
+        client_columns = {
+            item["name"] for item in inspect(connection).get_columns("clients")
+        }
+        if "probe_catalog_json" not in client_columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN probe_catalog_json TEXT DEFAULT '[]'")
+            )
 
         incident_columns = {
             item["name"] for item in inspect(connection).get_columns("incidents")

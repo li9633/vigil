@@ -42,10 +42,25 @@ def test_full_client_and_admin_flow(
             "uptime": 3600,
             "agent_version": "0.1.0",
             "wan_ip": "203.0.113.9",
-            "modules": {
-                "net.carrier": {"status": "ok", "latency_ms": 0},
-                "net.pppoe": {"status": "ok", "uptime": 1200},
+            "checks": {
+                "wan-link": {
+                    "check_id": "wan-link",
+                    "name": "WAN 物理链路",
+                    "probe": "carrier",
+                    "status": "ok",
+                    "latency_ms": 0,
+                },
+                "pppoe-session": {
+                    "check_id": "pppoe-session",
+                    "name": "PPPoE 会话",
+                    "probe": "pppoe",
+                    "status": "ok",
+                    "latency_ms": 3,
+                },
             },
+            "probes": [
+                {"id": "carrier", "name": "物理链路", "source": "builtin"},
+            ],
             "spool": {"pending": 0, "dropped": 0},
         },
     )
@@ -105,11 +120,13 @@ def test_full_client_and_admin_flow(
 
     detail = client.get(f"/api/v1/admin/clients/{client_id}").json()["data"]
     assert detail["client"]["client_id"] == client_id
-    assert [module["id"] for module in detail["modules"]] == [
-        "net.carrier",
-        "net.pppoe",
+    assert [check["check_id"] for check in detail["checks"]] == [
+        "wan-link",
+        "pppoe-session",
     ]
     assert detail["heartbeats"][0]["ts"] == detail["heartbeats"][0]["received_at"]
+    assert detail["heartbeats"][0]["checks"]["wan-link"]["status"] == "ok"
+    assert detail["heartbeats"][0]["probes"][0]["id"] == "carrier"
     assert detail["recent_events"] == []
     assert detail["actions"] == []
     assert detail["generated_at"]

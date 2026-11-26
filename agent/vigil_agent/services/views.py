@@ -443,24 +443,25 @@ def export_logs(
     return ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
 
 
-def modules_snapshot(app, checks):
-    """心跳兼容字段：按检测项 id 汇总状态与时延。"""
-    modules = {}
+def checks_snapshot(app, checks):
+    """心跳中的检测项状态快照，按 check_id 索引。"""
+    snapshot = {}
     for check in app.checks:
-        cid = check["id"]
-        result = checks.get(cid)
-        if not result:
-            continue
+        cid = str(check["id"])
+        result = checks.get(cid) or {}
         item = {
-            "status": result.get("status"),
+            "check_id": cid,
+            "name": check.get("name") or cid,
+            "probe": check.get("probe") or "",
+            "status": result.get("status") or STATUS_UNKNOWN,
             "latency_ms": int(result.get("latency_ms") or 0),
+            "evidence": result.get("evidence") if isinstance(result.get("evidence"), dict) else {},
         }
-        observed = (result.get("evidence") or {}).get("observed") or {}
-        uptime = observed.get("uptime")
-        if isinstance(uptime, int) and not isinstance(uptime, bool):
-            item["uptime"] = uptime
-        modules[cid] = item
-    return modules
+        checked_at = result.get("checked_at")
+        if checked_at:
+            item["checked_at"] = iso_utc(checked_at)
+        snapshot[cid] = item
+    return snapshot
 
 
 def wan_ip(app, checks):

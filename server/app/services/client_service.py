@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from typing import Any
@@ -17,7 +18,7 @@ from app.errors import UnauthorizedError, ValidationError
 from app.logstore import log_event
 from app.models import Beacon, Client
 from app.policies import effective_settings
-from app.repositories import event_repo, guard_repo, heartbeat_repo
+from app.repositories import check_repo, event_repo, guard_repo, heartbeat_repo
 from app.schemas import (
     BeaconRequest,
     BeaconResponse,
@@ -147,6 +148,8 @@ def record_heartbeat(
         client.wan_ip = payload.wan_ip
     if payload.agent_version:
         client.agent_version = payload.agent_version
+    # probe 目录只作为管理端只读缓存，不参与配置下发
+    client.probe_catalog_json = json.dumps(payload.probes, ensure_ascii=False)
 
     heartbeat_repo.add(
         db,
@@ -156,7 +159,8 @@ def record_heartbeat(
         uptime=payload.uptime,
         boot_id=payload.boot_id,
         wan_ip=payload.wan_ip,
-        modules=payload.modules,
+        checks=payload.checks,
+        probes=payload.probes,
         guards=payload.guards,
     )
 
@@ -179,9 +183,10 @@ def record_heartbeat(
     db.commit()
 
     guards = guard_repo.load_guard_configs(db, client.client_id)
+    checks = check_repo.load_check_configs(db, client.client_id)
     return HeartbeatResponse(
         server_time=int(time.time()),
-        config_etag=policy_etag(effective, guards),
+        config_etag=policy_etag(effective, checks, guards),
         actions_enabled=effective.actions_enabled,
     )
 
@@ -219,4 +224,5 @@ def load_policy(
     """返回 (策略文档, ETag)，供 /config 与心跳响应复用。"""
     effective = effective_settings(db, settings)
     guards = guard_repo.load_guard_configs(db, client.client_id)
-    return build_policy(effective, guards), policy_etag(effective, guards)
+    checks = check_repo.load_check_configs(db, client.client_id)
+    return build_policy(effective, checks, guards), policy_etag(effective, checks, guards)

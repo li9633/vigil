@@ -117,7 +117,7 @@ class TransportTest(unittest.TestCase):
         transport, client = self._transport(
             [(500, {}, b"{}"), (200, {}, b'{"ok": true}')]
         )
-        result = transport.heartbeat(1, 10, modules={"net.carrier": {"status": "ok"}})
+        result = transport.heartbeat(1, 10, checks={"wan-link": {"status": "ok"}})
         self.assertTrue(result["ok"])
         self.assertEqual(len(client.requests), 2)
         self.assertEqual(self.sleeps, [1.0])
@@ -208,7 +208,8 @@ class TransportTest(unittest.TestCase):
         transport.heartbeat(
             3,
             500,
-            modules={"net.carrier": {"status": "ok", "latency_ms": 0}},
+            checks={"wan-link": {"check_id": "wan-link", "status": "ok", "latency_ms": 0}},
+            probes=[{"id": "carrier", "name": "物理链路"}],
             spool={"pending": 2, "dropped": 1},
             wan_ip="203.0.113.5",
         )
@@ -218,7 +219,8 @@ class TransportTest(unittest.TestCase):
         self.assertEqual(body["wan_ip"], "203.0.113.5")
         self.assertEqual(body["spool"], {"pending": 2, "dropped": 1})
         self.assertEqual(body["agent_version"], "1.0.0")
-        self.assertIn("net.carrier", body["modules"])
+        self.assertIn("wan-link", body["checks"])
+        self.assertEqual(body["probes"], [{"id": "carrier", "name": "物理链路"}])
         self.assertEqual(body["boot_id"], "boot-1")
 
 

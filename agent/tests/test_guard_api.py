@@ -29,6 +29,19 @@ def make_guard(name="测试守护", interval=30, enabled=True, check_refs=None):
     }
 
 
+def make_check(check_id="custom-http", probe="http", params=None):
+    return {
+        "id": check_id,
+        "name": check_id,
+        "probe": probe,
+        "params": params if params is not None else {"url": "http://127.0.0.1/"},
+        "expect": {"kind": "http", "status": [200]},
+        "timeout": 5,
+        "depends_on": [],
+        "enabled": True,
+    }
+
+
 class FakeTransport:
     """只实现 fetch_config 的假传输层，用于驱动 poll_config。"""
 
@@ -135,7 +148,9 @@ class AgentAppGuardTest(unittest.TestCase):
 
     def test_poll_config_applies_server_guards(self):
         server_guard = make_guard(name="服务端守护", interval=15)
-        self.app.transport = FakeTransport({"guards": [server_guard]})
+        self.app.transport = FakeTransport(
+            {"schema_version": 3, "guards": [server_guard]}
+        )
 
         self.app.poll_config()
 
@@ -149,7 +164,9 @@ class AgentAppGuardTest(unittest.TestCase):
         self.assertEqual(self.app._guard_last_run, {})
 
     def test_poll_config_without_guards_falls_back_to_local(self):
-        self.app.transport = FakeTransport({"guards": [make_guard(name="服务端守护")]})
+        self.app.transport = FakeTransport(
+            {"schema_version": 3, "guards": [make_guard(name="服务端守护")]}
+        )
         self.app.poll_config()
         self.assertEqual(self.app.guards_source, "server")
 
@@ -167,11 +184,67 @@ class AgentAppGuardTest(unittest.TestCase):
     def test_poll_config_invalid_guards_keeps_current(self):
         before = copy.deepcopy(self.app.guards)
         self.app.transport = FakeTransport(
-            {"guards": [{"id": "not-a-uuid", "name": ""}]}
+            {"schema_version": 3, "guards": [{"id": "not-a-uuid", "name": ""}]}
         )
         with self.assertLogs("vigil.agent", level="WARNING"):
             self.app.poll_config()
         self.assertEqual(self.app.guards, before)
+        self.assertEqual(self.app.guards_source, "local")
+
+    def test_poll_config_applies_server_checks_and_guards(self):
+        check = make_check()
+        server_guard = make_guard(name="服务端守护", interval=15, check_refs=[check["id"]])
+        self.app.transport = FakeTransport(
+            {"schema_version": 3, "checks": [check], "guards": [server_guard]}
+        )
+
+        self.app.poll_config()
+
+        self.assertEqual(self.app.guards_source, "server")
+        self.assertFalse(self.app.api_guards()["editable"])
+        self.assertEqual([item["id"] for item in self.app.checks], [check["id"]])
+        self.assertEqual([item["id"] for item in self.app.guards], [server_guard["id"]])
+        self.assertEqual(self.app.scheduler._tasks["detect"]["interval"], 15)
+
+        # 服务端撤回配置后回退本地 checks + guards
+        self.app.transport = FakeTransport({"schema_version": 3})
+        self.app.poll_config()
+        self.assertEqual(self.app.guards_source, "local")
+        self.assertIn("wan-link", [item["id"] for item in self.app.checks])
+        self.assertEqual(
+            [item["id"] for item in self.app.guards], [self.initial_guard["id"]]
+        )
+        self.assertIsNone(self.app._server_guards)
+
+    def test_poll_config_invalid_server_checks_keeps_current(self):
+        before_checks = copy.deepcopy(self.app.checks)
+        before_guards = copy.deepcopy(self.app.guards)
+        self.app.transport = FakeTransport(
+            {
+                "schema_version": 3,
+                "checks": [make_check("local-cmd", probe="command", params={"argv": ["true"]})],
+                "guards": [make_guard(check_refs=["local-cmd"])],
+            }
+        )
+        with self.assertLogs("vigil.agent", level="WARNING"):
+            self.app.poll_config()
+        self.assertEqual(self.app.checks, before_checks)
+        self.assertEqual(self.app.guards, before_guards)
+        self.assertEqual(self.app.guards_source, "local")
+
+    def test_poll_config_guard_refs_must_match_server_checks(self):
+        before_checks = copy.deepcopy(self.app.checks)
+        check = make_check()
+        self.app.transport = FakeTransport(
+            {
+                "schema_version": 3,
+                "checks": [check],
+                "guards": [make_guard(name="断链", check_refs=["wan-link"])],
+            }
+        )
+        with self.assertLogs("vigil.agent", level="WARNING"):
+            self.app.poll_config()
+        self.assertEqual(self.app.checks, before_checks)
         self.assertEqual(self.app.guards_source, "local")
 
     # ---------- 热更新即时生效 ----------

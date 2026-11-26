@@ -25,6 +25,8 @@ class Client(Base):
     boot_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     wan_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 最近一次心跳上报的 probe 目录（只读缓存，不作为配置来源）
+    probe_catalog_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -48,8 +50,26 @@ class Heartbeat(Base):
     uptime: Mapped[int] = mapped_column(Integer, default=0)
     boot_id: Mapped[str] = mapped_column(String(64), default="")
     wan_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    modules_json: Mapped[str] = mapped_column(Text, default="{}")
+    checks_json: Mapped[str] = mapped_column(Text, default="{}")
+    probes_json: Mapped[str] = mapped_column(Text, default="[]")
     guards_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class CheckConfig(Base):
+    """服务端下发的检测项配置（与 Guard 解耦，可被多个 Guard 引用）。"""
+
+    __tablename__ = "checks"
+
+    # 复合主键：同一客户端内 check_id 唯一
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    check_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    probe: Mapped[str] = mapped_column(String(64), default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 完整 Check 配置 JSON（id/name/probe/params/expect/timeout/depends_on/enabled）
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    config_hash: Mapped[str] = mapped_column(String(64), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class GuardConfig(Base):

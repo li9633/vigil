@@ -47,7 +47,8 @@ class HeartbeatItem(BaseModel):
     uptime: int
     boot_id: str
     wan_ip: str | None
-    modules: dict[str, Any]
+    checks: dict[str, Any]
+    probes: list[dict[str, Any]]
     guards: dict[str, Any]
 
 
@@ -73,11 +74,13 @@ class GuardStatusItem(BaseModel):
     checks: dict[str, Any]
 
 
-class ModuleStatusItem(BaseModel):
-    id: str
+class CheckStatusItem(BaseModel):
+    check_id: str
+    name: str | None = None
+    probe: str | None = None
     status: str | None = None
     latency_ms: int | None = None
-    uptime: int | None = None
+    evidence: dict[str, Any]
 
 
 class TimelineItem(BaseModel):
@@ -109,7 +112,7 @@ class ClientListResponse(BaseModel):
 
 class ClientDetailResponse(BaseModel):
     client: ClientSummary
-    modules: list[ModuleStatusItem]
+    checks: list[CheckStatusItem]
     guards: list[GuardStatusItem]
     heartbeats: list[HeartbeatItem]
     incidents: list[IncidentItem]
@@ -125,6 +128,16 @@ class IncidentListResponse(BaseModel):
 class GuardListResponse(BaseModel):
     items: list[dict[str, Any]]
     managed: bool
+
+
+class CheckListResponse(BaseModel):
+    items: list[dict[str, Any]]
+    managed: bool
+
+
+class ProbeCatalogResponse(BaseModel):
+    items: list[dict[str, Any]]
+    updated_at: str | None = None
 
 
 class PolicyResponse(BaseModel):

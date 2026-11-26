@@ -41,7 +41,8 @@ def add(
     uptime: int,
     boot_id: str,
     wan_ip: str | None,
-    modules: dict[str, Any],
+    checks: dict[str, Any],
+    probes: list[dict[str, Any]],
     guards: dict[str, Any],
 ) -> Heartbeat:
     row = Heartbeat(
@@ -51,7 +52,8 @@ def add(
         uptime=uptime,
         boot_id=boot_id,
         wan_ip=wan_ip,
-        modules_json=json.dumps(modules, ensure_ascii=False),
+        checks_json=json.dumps(checks, ensure_ascii=False),
+        probes_json=json.dumps(probes, ensure_ascii=False),
         guards_json=json.dumps(guards, ensure_ascii=False),
     )
     db.add(row)

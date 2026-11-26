@@ -189,7 +189,8 @@ def test_heartbeat_marks_incident_recovered(
             "uptime": 240,
             "agent_version": "0.1.0",
             "wan_ip": "203.0.113.7",
-            "modules": {},
+            "checks": {},
+            "probes": [],
             "spool": {"pending": 0, "dropped": 0},
         },
     )
@@ -226,7 +227,8 @@ def test_device_reboot_is_recorded(
             "uptime": 20,
             "agent_version": "0.1.0",
             "wan_ip": "203.0.113.8",
-            "modules": {},
+            "checks": {},
+            "probes": [],
         },
     )
     assert response.status_code == 200

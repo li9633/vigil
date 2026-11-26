@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from app.api.admin import (
     audit,
     auth,
+    checks,
     guards,
     incidents,
     logs,
@@ -22,6 +23,7 @@ router.include_router(auth.router)
 router.include_router(reads.router)
 router.include_router(incidents.router)
 router.include_router(guards.router)
+router.include_router(checks.router)
 router.include_router(policies.router)
 router.include_router(system.router)
 router.include_router(notifications.router)

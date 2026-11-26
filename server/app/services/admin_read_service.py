@@ -102,7 +102,7 @@ def get_client_detail(
 
     return ClientDetailResponse(
         client=serializers.client_summary(client, effective, now, latest_incident),
-        modules=serializers.modules_from_heartbeat(latest_heartbeat),
+        checks=serializers.checks_from_heartbeat(latest_heartbeat),
         guards=serializers.guards_from_heartbeat(latest_heartbeat),
         heartbeats=[serializers.heartbeat_item(item) for item in heartbeats],
         incidents=[

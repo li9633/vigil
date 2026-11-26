@@ -9,6 +9,7 @@
 业务规则与视图组装在 `services/`，HTTP 控制在 `api/`，本模块只做装配与调度。
 """
 
+import copy
 import logging
 import os
 import secrets
@@ -69,6 +70,8 @@ class AgentApp:
         self._reload_probes(log=False)
         self.checks = normalize_checks(list(config.get("checks") or []), self.registry)
         self.guards = [normalize_guard(item) for item in config.get("guards") or []]
+        # 本地配置快照：服务端配置撤回时回退
+        self._local_checks = copy.deepcopy(self.checks)
         # guards 来源：local=本地编辑；server=服务端下发（本地只读）
         self.guards_source = "local"
         self._server_guards = None

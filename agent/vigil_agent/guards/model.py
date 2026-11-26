@@ -97,16 +97,21 @@ def _validate_uuid(value, errors, where):
         errors.append("%s 必须是 UUIDv4 或 UUIDv5" % where)
 
 
-def validate_guards(config, errors=None, checks=None):
+def validate_guards(config, errors=None, checks=None, allow_empty=False):
     """校验 guards、action_safety 与 check_refs 引用。
 
     checks 未显式传入时使用 config["checks"]；两者都没有时跳过引用存在性校验。
+    allow_empty=True 时允许服务端下发空 guards（仅管理 checks 的场景）。
     """
     if errors is None:
         errors = []
     guards = config.get("guards")
-    if not isinstance(guards, list) or not guards:
-        errors.append("guards 必须是非空数组")
+    if not isinstance(guards, list):
+        errors.append("guards 必须是数组")
+        return errors
+    if not guards:
+        if not allow_empty:
+            errors.append("guards 必须是非空数组")
         return errors
 
     if checks is None:

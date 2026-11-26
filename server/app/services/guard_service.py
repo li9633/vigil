@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import uuid
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.db import utcnow
+from app.domain.check_config import check_ids, validate_and_normalize_guards
 from app.errors import NotFoundError, ValidationError
 from app.logstore import log_event
 from app.models import GuardConfig
-from app.repositories import audit_repo, client_repo, guard_repo
+from app.repositories import audit_repo, check_repo, client_repo, guard_repo
 from app.schemas.admin import GuardListResponse
 
 
@@ -25,37 +25,6 @@ def _ensure_client(db: Session, client_id: str) -> None:
 def _guard_config_hash(config: dict[str, Any]) -> str:
     body = json.dumps(config, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:32]
-
-
-def _normalize_guard(raw: Any, index: int) -> dict[str, Any]:
-    """校验单个 Guard 配置并规范化 id / name。"""
-    if not isinstance(raw, dict):
-        raise ValidationError(f"guards[{index}] 必须是对象")
-
-    raw_id = raw.get("id")
-    if not isinstance(raw_id, str) or not raw_id.strip():
-        raise ValidationError(f"guards[{index}].id 必须是 UUID")
-    try:
-        # 统一存小写标准形式，避免同一 UUID 因写法不同被当成两个
-        guard_id = str(uuid.UUID(raw_id.strip()))
-    except ValueError as exc:
-        raise ValidationError(f"guards[{index}].id 必须是 UUID") from exc
-
-    name = raw.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise ValidationError(f"guards[{index}].name 不能为空")
-
-    checks = raw.get("checks")
-    if not isinstance(checks, list) or not checks:
-        raise ValidationError(f"guards[{index}].checks 必须是非空数组")
-
-    if not isinstance(raw.get("policy"), dict):
-        raise ValidationError(f"guards[{index}].policy 必须是对象")
-
-    if not isinstance(raw.get("recovery"), list):
-        raise ValidationError(f"guards[{index}].recovery 必须是数组")
-
-    return {**raw, "id": guard_id, "name": name.strip()}
 
 
 def _serialize_rows(rows: list[GuardConfig]) -> GuardListResponse:
@@ -79,22 +48,15 @@ def list_guards(db: Session, client_id: str) -> GuardListResponse:
 def replace_guards(
     db: Session, client_id: str, payload: dict[str, Any], *, actor: str
 ) -> GuardListResponse:
-    """整体替换该客户端的 Guard 配置。"""
+    """整体替换该客户端的 Guard 配置，check_refs 必须指向已保存的检测项。"""
     _ensure_client(db, client_id)
 
     raw_guards = payload.get("guards")
     if not isinstance(raw_guards, list):
         raise ValidationError("guards 必须是数组")
 
-    configs: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for index, raw in enumerate(raw_guards):
-        config = _normalize_guard(raw, index)
-        guard_id = str(config["id"])
-        if guard_id in seen:
-            raise ValidationError(f"guard_id 重复: {guard_id}")
-        seen.add(guard_id)
-        configs.append(config)
+    available = check_ids(check_repo.load_check_configs(db, client_id))
+    configs = validate_and_normalize_guards(raw_guards, available)
 
     now = utcnow()
     existing = guard_repo.rows_map(db, client_id)
@@ -113,7 +75,7 @@ def replace_guards(
 
     removed = 0
     for guard_id, row in existing.items():
-        if guard_id not in seen:
+        if guard_id not in {str(config["id"]) for config in configs}:
             db.delete(row)
             removed += 1
 

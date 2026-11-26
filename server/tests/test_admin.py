@@ -116,7 +116,8 @@ def test_admin_client_detail_and_ack(
             "uptime": 60,
             "agent_version": "0.1.0",
             "wan_ip": "203.0.113.7",
-            "modules": {"net.carrier": {"status": "ok", "latency_ms": 0}},
+            "checks": {"wan-link": {"check_id": "wan-link", "status": "ok", "latency_ms": 0}},
+            "probes": [{"id": "carrier", "name": "物理链路"}],
         },
     )
     assert heartbeat.status_code == 200

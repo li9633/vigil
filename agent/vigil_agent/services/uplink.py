@@ -84,7 +84,8 @@ def heartbeat_once(app):
     result = app.transport.heartbeat(
         app.spool.next_seq(persist=False),
         read_uptime(),
-        modules=views.modules_snapshot(app, checks),
+        checks=views.checks_snapshot(app, checks),
+        probes=app.registry.catalog(),
         guards=guard_service.heartbeat_payload(app.state.snapshot_guards()),
         spool={"pending": stats["pending"], "dropped": stats["dropped"]},
         wan_ip=views.wan_ip(app, checks),
@@ -143,7 +144,7 @@ def poll_config(app):
         app._etag = result["etag"]
     body = result.get("body") or {}
     app._server_config = body if isinstance(body, dict) else {}
-    apply_server_guards(app, app._server_config)
+    apply_server_config(app, app._server_config)
     app._record_event(
         "config_received",
         "agent",
@@ -158,33 +159,37 @@ def poll_config(app):
     )
 
 
-def apply_server_guards(app, server_config):
-    """应用服务端下发的 guards（热更新）。
+def apply_server_config(app, server_config):
+    """应用服务端下发的 checks + guards（整体替换、热更新）。
 
-    - 含 guards 列表且校验通过：切换到 server 来源，本地不可编辑
-    - 未含 guards 键：回退到本地配置
-    - 校验失败：只记日志并保持当前 guards 不变
+    - 含 checks / guards：校验通过后整体切换到 server 来源，本地只读
+    - 两者都未下发：回退到本地配置
+    - 校验失败：只记日志并保持当前配置，不做部分应用
     """
-    decision, errors = guard_service.plan_server_guards(
+    decision, errors = guard_service.plan_server_config(
         server_config,
+        app._local_checks,
         app.config.get("guards") or [],
+        app.checks,
+        app.guards,
         app.guards_source,
         app._server_guards,
-        app.checks,
+        app.registry,
     )
     if errors:
         log_event(
             "warn",
             "guard_config.invalid",
-            "服务端下发的守护项非法，保持当前配置",
+            "服务端下发的配置非法，保持当前配置",
             errors=errors[:20],
         )
         return
     if decision is None:
         return
 
-    # guards 替换与 detect_once 互斥，避免检测过程中被换掉
+    # checks / guards 替换与 detect_once 互斥，避免检测过程中被换掉
     with app._detect_lock:
+        app.checks = decision["checks"]
         app.guards = decision["guards"]
         app.guards_source = decision["source"]
         app._server_guards = decision["server_guards"]
@@ -194,7 +199,8 @@ def apply_server_guards(app, server_config):
     log_event(
         "info",
         "guard_config.apply",
-        "已应用守护项配置",
+        "已应用服务端配置",
         source=app.guards_source,
-        count=len(app.guards),
+        check_count=len(app.checks),
+        guard_count=len(app.guards),
     )

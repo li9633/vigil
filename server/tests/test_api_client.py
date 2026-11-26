@@ -22,7 +22,8 @@ def _heartbeat_body(client_id: str) -> dict[str, Any]:
         "uptime": 120,
         "agent_version": "0.1.0",
         "wan_ip": "203.0.113.7",
-        "modules": {"net.carrier": {"status": "ok", "latency_ms": 0}},
+        "checks": {"wan-link": {"check_id": "wan-link", "status": "ok", "latency_ms": 0}},
+        "probes": [{"id": "carrier", "name": "物理链路", "remote_allowed": True}],
         "spool": {"pending": 0, "dropped": 0},
     }
 
@@ -197,6 +198,7 @@ def test_config_etag(
     assert response.status_code == 200
     etag = response.headers["ETag"]
     body = response.json()["data"]
+    assert body["schema_version"] == 3
     assert body["heartbeat_interval"] == 30
     assert body["actions_enabled"] is True
     assert body["thresholds"]["suspect_seconds"] == 90

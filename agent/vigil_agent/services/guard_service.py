@@ -4,7 +4,14 @@ import copy
 import logging
 import time
 
-from ..checks.model import check_map, dependency_closure, dependency_graph
+from ..checks.model import (
+    CheckConfigError,
+    check_map,
+    dependency_closure,
+    dependency_graph,
+    normalize_checks,
+    validate_checks,
+)
 from ..checks.runner import STATUS_SKIPPED, CheckRunner, aggregate_status
 from ..config import save_config
 from ..guards.model import normalize_guard, validate_guards
@@ -180,37 +187,79 @@ def update_local_guards(app, guards):
     return candidate
 
 
-def plan_server_guards(
-    server_config, local_guards, current_source, current_server_guards, checks
+def plan_server_config(
+    server_config,
+    local_checks,
+    local_guards,
+    current_checks,
+    current_guards,
+    current_source,
+    current_server_guards,
+    registry,
 ):
-    """计算服务端下发 guards 的应用方案。
+    """计算服务端下发 checks + guards 的整体应用方案。
 
     返回 (decision, errors)：
     - decision 为 None 表示保持现状
-    - errors 非空表示下发的 guards 校验失败，调用方只记日志
+    - errors 非空表示校验失败，调用方只记日志并保持当前配置
     """
-    raw = server_config.get("guards") if isinstance(server_config, dict) else None
-    if isinstance(raw, list):
-        candidate = [
-            normalize_guard(item) if isinstance(item, dict) else item for item in raw
-        ]
-        errors = []
-        validate_guards({"guards": candidate}, errors, checks=checks)
-        if errors:
-            return None, errors
+    if not isinstance(server_config, dict):
+        return None, []
+
+    has_checks = "checks" in server_config
+    has_guards = "guards" in server_config
+    if not has_checks and not has_guards:
+        if current_source == "local" and current_server_guards is None:
+            # 已经是本地配置，无需重复替换与重置节流
+            return None, []
         return {
-            "guards": candidate,
-            "source": "server",
-            "server_guards": copy.deepcopy(candidate),
+            "checks": copy.deepcopy(local_checks),
+            "guards": copy.deepcopy(local_guards),
+            "source": "local",
+            "server_guards": None,
         }, []
 
-    if current_source == "local" and current_server_guards is None:
-        # 已经是本地配置，无需重复替换与重置节流
-        return None, []
+    if server_config.get("schema_version") != 3:
+        return None, ["schema_version 必须为 3"]
+
+    errors = []
+    if has_checks:
+        raw_checks = server_config.get("checks")
+        if not isinstance(raw_checks, list):
+            return None, ["checks 必须是数组"]
+        try:
+            candidate_checks = normalize_checks(raw_checks, registry)
+        except CheckConfigError as exc:
+            return None, [str(exc)]
+        validate_checks(candidate_checks, registry, errors, remote=True)
+        if errors:
+            return None, errors
+    else:
+        candidate_checks = copy.deepcopy(current_checks)
+
+    if has_guards:
+        raw_guards = server_config.get("guards")
+        if not isinstance(raw_guards, list):
+            return None, ["guards 必须是数组"]
+        candidate_guards = [
+            normalize_guard(item) if isinstance(item, dict) else item
+            for item in raw_guards
+        ]
+    else:
+        candidate_guards = copy.deepcopy(current_guards)
+
+    # 远端配置允许空 guards（只管理 checks），但仍校验 refs 与策略字段
+    validate_guards(
+        {"guards": candidate_guards}, errors, checks=candidate_checks, allow_empty=True
+    )
+    if errors:
+        return None, errors
+
     return {
-        "guards": copy.deepcopy(local_guards or []),
-        "source": "local",
-        "server_guards": None,
+        "checks": candidate_checks,
+        "guards": candidate_guards,
+        "source": "server",
+        "server_guards": copy.deepcopy(candidate_guards),
     }, []
 
 

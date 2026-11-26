@@ -10,12 +10,12 @@ from app.models import AuditLog, Client, ClientEvent, Heartbeat, Incident, Notif
 from app.schemas import iso_utc
 from app.schemas.admin import (
     AuditItem,
+    CheckStatusItem,
     ClientSummary,
     EventItem,
     GuardStatusItem,
     HeartbeatItem,
     IncidentItem,
-    ModuleStatusItem,
 )
 from app.settings import Settings
 
@@ -103,7 +103,8 @@ def notification_item(record: Notification) -> dict[str, Any]:
 
 
 def heartbeat_item(heartbeat: Heartbeat) -> HeartbeatItem:
-    modules = _load_json(heartbeat.modules_json)
+    checks = _load_json(heartbeat.checks_json)
+    probes = _load_json(heartbeat.probes_json)
     guards = _load_json(heartbeat.guards_json)
     received_at = iso_utc(heartbeat.received_at)
     return HeartbeatItem(
@@ -113,7 +114,8 @@ def heartbeat_item(heartbeat: Heartbeat) -> HeartbeatItem:
         uptime=heartbeat.uptime,
         boot_id=heartbeat.boot_id,
         wan_ip=heartbeat.wan_ip,
-        modules=modules if isinstance(modules, dict) else {},
+        checks=checks if isinstance(checks, dict) else {},
+        probes=probes if isinstance(probes, list) else [],
         guards=guards if isinstance(guards, dict) else {},
     )
 
@@ -160,23 +162,26 @@ def guards_from_heartbeat(heartbeat: Heartbeat | None) -> list[GuardStatusItem]:
     return items
 
 
-def modules_from_heartbeat(heartbeat: Heartbeat | None) -> list[ModuleStatusItem]:
-    """把最近一次心跳的 modules 字典展开成数组。"""
+def checks_from_heartbeat(heartbeat: Heartbeat | None) -> list[CheckStatusItem]:
+    """把最近一次心跳的 checks 字典展开成数组。"""
     if heartbeat is None:
         return []
-    modules = _load_json(heartbeat.modules_json)
-    if not isinstance(modules, dict):
+    checks = _load_json(heartbeat.checks_json)
+    if not isinstance(checks, dict):
         return []
-    items: list[ModuleStatusItem] = []
-    for module_id, value in modules.items():
+    items: list[CheckStatusItem] = []
+    for check_id, value in checks.items():
         if not isinstance(value, dict):
             continue
+        evidence = value.get("evidence")
         items.append(
-            ModuleStatusItem(
-                id=str(module_id),
+            CheckStatusItem(
+                check_id=str(value.get("check_id") or check_id),
+                name=value.get("name"),
+                probe=value.get("probe"),
                 status=value.get("status"),
                 latency_ms=value.get("latency_ms"),
-                uptime=value.get("uptime"),
+                evidence=evidence if isinstance(evidence, dict) else {},
             )
         )
     return items

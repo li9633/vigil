@@ -43,7 +43,8 @@ class HeartbeatRequest(BaseModel):
     uptime: int = 0
     agent_version: str = ""
     wan_ip: str | None = None
-    modules: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    checks: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    probes: list[dict[str, Any]] = Field(default_factory=list)
     guards: dict[str, dict[str, Any]] = Field(default_factory=dict)
     spool: SpoolStats | None = None
 
