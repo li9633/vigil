@@ -67,6 +67,21 @@ def test_admin_login_success_resets_limiter(client: TestClient) -> None:
     assert _login(client, password="wrong").status_code == 401
 
 
+def test_admin_login_returns_envelope(client: TestClient) -> None:
+    body = _login(client).json()
+    assert body["code"] == "ok"
+    assert body["message"] == "ok"
+    assert body["data"]["actor"] == "admin"
+    assert isinstance(body["data"]["server_time"], int)
+
+
+def test_admin_login_error_envelope(client: TestClient) -> None:
+    body = _login(client, password="wrong").json()
+    assert body["code"] == "unauthorized"
+    assert body["message"] == "用户名或密码错误"
+    assert body["data"] is None
+
+
 def test_admin_login_overview_and_audit(
     client: TestClient, registered: dict[str, Any]
 ) -> None:

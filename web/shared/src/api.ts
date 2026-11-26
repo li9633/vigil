@@ -75,6 +75,23 @@ export function unwrapList<T>(payload: ListResponse<T> | null | undefined): T[] 
   return Array.isArray(payload.items) ? payload.items : []
 }
 
+/**
+ * 解包统一响应 `{code, message, data}`。
+ * 迁移期兼容尚未包装的裸响应：没有 code/data 字段时原样返回。
+ */
+function unwrapEnvelope(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object') return payload
+  const body = payload as Record<string, unknown>
+  if (typeof body.code !== 'string' || !('data' in body)) return payload
+  if (body.code === 'ok') return body.data
+  throw new ApiError(
+    typeof body.message === 'string' && body.message ? body.message : '请求失败',
+    0,
+    body.code,
+    body,
+  )
+}
+
 function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   const isAbsolute = /^https?:\/\//i.test(path)
   let url = isAbsolute ? path : `${config.baseURL}${path.startsWith('/') ? '' : '/'}${path}`
@@ -207,7 +224,7 @@ async function request<T>(
       throw new ApiError(extractMessage(data, fallback), response.status, extractCode(data), data)
     }
 
-    return data as T
+    return unwrapEnvelope(data) as T
   } catch (error) {
     if (error instanceof ApiError) throw error
     if (timedOut) throw new ApiError('请求超时，请检查网络', 0, 'timeout')

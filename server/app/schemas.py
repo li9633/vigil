@@ -87,5 +87,11 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class LoginResponse(BaseModel):
+    ok: bool = True
+    actor: str
+    server_time: int
+
+
 class NotificationTestRequest(BaseModel):
     channel: str = Field(default="all", pattern="^(feishu|wecom|email|all)$")

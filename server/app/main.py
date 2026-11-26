@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.api.error_handlers import register_exception_handlers
 from app.api_admin import router as admin_router
 from app.api_client import router as client_router
 from app.db import init_db, init_engine
@@ -47,6 +48,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = resolved
+    register_exception_handlers(app)
     app.add_middleware(
         SessionMiddleware,
         secret_key=resolved.session_secret,

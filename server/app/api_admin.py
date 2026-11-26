@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -17,6 +16,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
+from app.api.deps import client_ip, require_admin
+from app.api.responses import ApiResponse, ok
 from app.db import get_session, session_scope, utcnow
 from app.logstore import collect_log_events, export_log_events, log_event, log_paths
 from app.models import (
@@ -44,8 +45,13 @@ from app.policies import (
     load_policies,
     save_policies,
 )
-from app.schemas import LoginRequest, NotificationTestRequest, iso_utc
-from app.security import constant_time_equals, hash_secret, new_client_secret
+from app.schemas import LoginRequest, LoginResponse, NotificationTestRequest, iso_utc
+from app.security import hash_secret, new_client_secret
+from app.services.auth_service import (  # noqa: F401 - 兼容旧调用方的 re-export
+    LOGIN_MAX_FAILURES,
+    login_admin,
+    reset_login_limiter,
+)
 from app.settings import Settings, settings_from_app
 from app.state_machine import CATEGORY_AGENT_DOWN, CATEGORY_HOST_OR_NET_DOWN
 from app.system_settings import (
@@ -57,72 +63,6 @@ from app.system_settings import (
 )
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
-
-# 管理员登录限流：窗口内失败次数达到上限后暂时拒绝，防止在线爆破
-LOGIN_MAX_FAILURES = 5
-LOGIN_WINDOW_SECONDS = 60
-_login_failures: dict[str, list[float]] = {}
-_login_lock = threading.Lock()
-
-
-def _login_client_key(request: Request) -> str:
-    """取真实来源 IP；服务位于 nginx 之后，优先使用代理写入的头部。"""
-    forwarded = request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for") or ""
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
-def _prune_login_failures(now: float) -> None:
-    expired = [
-        key
-        for key, stamps in _login_failures.items()
-        if not stamps or now - stamps[-1] >= LOGIN_WINDOW_SECONDS
-    ]
-    for key in expired:
-        _login_failures.pop(key, None)
-
-
-def _login_blocked(key: str, now: float) -> tuple[bool, float]:
-    """返回 (是否限流, 最早一次失败时间)。"""
-    with _login_lock:
-        stamps = [
-            stamp for stamp in _login_failures.get(key, []) if now - stamp < LOGIN_WINDOW_SECONDS
-        ]
-        if stamps:
-            _login_failures[key] = stamps
-        else:
-            _login_failures.pop(key, None)
-        if len(_login_failures) > 512:
-            _prune_login_failures(now)
-        return len(stamps) >= LOGIN_MAX_FAILURES, stamps[0] if stamps else now
-
-
-def _record_login_failure(key: str, now: float) -> None:
-    with _login_lock:
-        _login_failures.setdefault(key, []).append(now)
-
-
-def _clear_login_failures(key: str) -> None:
-    with _login_lock:
-        _login_failures.pop(key, None)
-
-
-def reset_login_limiter() -> None:
-    """清空限流状态，供测试使用。"""
-    with _login_lock:
-        _login_failures.clear()
-
-
-
-def require_admin(request: Request) -> str:
-    actor = request.session.get("admin")
-    if not actor:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="未登录",
-        )
-    return str(actor)
 
 
 def _client_state(online: bool) -> str:
@@ -297,78 +237,16 @@ def login(
     request: Request,
     db: Session = Depends(get_session),
     settings: Settings = Depends(settings_from_app),
-) -> dict[str, Any]:
-    now = time.time()
-    client_key = _login_client_key(request)
-    blocked, first_failure = _login_blocked(client_key, now)
-    if blocked:
-        retry_after = max(1, int(LOGIN_WINDOW_SECONDS - (now - first_failure)))
-        db.add(
-            AuditLog(
-                actor=payload.username,
-                action="login_blocked",
-                target="admin",
-                ts=utcnow(),
-                detail=json.dumps(
-                    {"ip": client_key, "retry_after": retry_after}, ensure_ascii=False
-                ),
-            )
-        )
-        db.commit()
-        log_event(
-            "warn",
-            "auth.login.blocked",
-            "管理员登录被限流",
-            username=payload.username,
-            ip=client_key,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="登录尝试过于频繁，请稍后再试",
-            headers={"Retry-After": str(retry_after)},
-        )
-
-    valid = constant_time_equals(payload.username, settings.admin_username) and (
-        verify_admin_password(db, settings.admin_password, payload.password)
+) -> ApiResponse[LoginResponse]:
+    actor = login_admin(
+        db,
+        settings,
+        username=payload.username,
+        password=payload.password,
+        client_key=client_ip(request),
     )
-    if not valid:
-        _record_login_failure(client_key, now)
-        db.add(
-            AuditLog(
-                actor=payload.username,
-                action="login_fail",
-                target="admin",
-                ts=utcnow(),
-                detail=json.dumps({"ip": client_key}, ensure_ascii=False),
-            )
-        )
-        db.commit()
-        log_event(
-            "warn",
-            "auth.login.fail",
-            "管理员登录失败",
-            username=payload.username,
-            ip=client_key,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="用户名或密码错误",
-        )
-
-    _clear_login_failures(client_key)
-    request.session["admin"] = payload.username
-    db.add(
-        AuditLog(
-            actor=payload.username,
-            action="login",
-            target="admin",
-            ts=utcnow(),
-            detail=json.dumps({"ip": client_key}, ensure_ascii=False),
-        )
-    )
-    db.commit()
-    log_event("info", "auth.login.success", "管理员登录成功", actor=payload.username)
-    return {"ok": True, "actor": payload.username, "server_time": int(time.time())}
+    request.session["admin"] = actor
+    return ok(LoginResponse(actor=actor, server_time=int(time.time())))
 
 
 @router.get("/overview")
