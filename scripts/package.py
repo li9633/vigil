@@ -407,6 +407,7 @@ REQUIRED_PATHS = {
     "usr/lib/vigil/vigil_agent/config.py",
     "usr/share/vigil/www/index.html",
     "etc/init.d/vigil",
+    "etc/vigil/probes.d",
     "usr/bin/vigil-beacon",
     CONFIG_PATH,
 }

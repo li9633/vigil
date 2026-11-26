@@ -78,10 +78,21 @@ sleep 3
 
 ps w | grep -v grep | grep -q "vigil_agent.main" || { echo "client: agent 进程未启动"; exit 1; }
 
+if command -v curl >/dev/null 2>&1; then
+    http_get() { curl -fsS -o /dev/null "$1"; }
+elif command -v uclient-fetch >/dev/null 2>&1; then
+    http_get() { uclient-fetch -q -O /dev/null "$1"; }
+elif command -v wget >/dev/null 2>&1; then
+    http_get() { wget -q -O /dev/null "$1"; }
+else
+    echo "client: 缺少 HTTP 客户端（curl / uclient-fetch / wget）"
+    exit 1
+fi
+
 ok=0
 i=0
 while [ $i -lt 10 ]; do
-    if curl -fsS -o /dev/null http://127.0.0.1:8787/; then ok=1; break; fi
+    if http_get http://127.0.0.1:8787/; then ok=1; break; fi
     i=$((i + 1))
     sleep 1
 done
