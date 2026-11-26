@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.db import utcnow
 from app.logstore import log_event
 from app.models import Setting
-from app.notifications import send_system_alert
+from app.services.notification_service import send_system_alert
 
 SETTING_KEY = "disk_guard"
 CLEAR_MARGIN_PERCENT = 5

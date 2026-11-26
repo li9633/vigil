@@ -9,9 +9,9 @@ import pytest
 from sqlalchemy import select
 
 from app import diskguard
+from app.adapters.notifiers.base import NotificationMessage, Notifier, SendResult
 from app.db import session_scope, utcnow
 from app.models import Notification
-from app.notifiers.base import NotificationMessage, Notifier, SendResult
 
 CONFIG = {
     "feishu": {"enabled": True, "webhook": "https://open.feishu.cn/hook/abcd"},
@@ -91,7 +91,9 @@ def test_system_alert_records_notification(
     db_ready: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr(
+        "app.services.notification_service.build_notifiers", lambda config: [recorder]
+    )
     now = utcnow()
 
     with session_scope() as db:

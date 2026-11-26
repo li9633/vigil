@@ -8,7 +8,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
@@ -27,23 +27,13 @@ from app.models import (
     Incident,
     Notification,
 )
-from app.notifications import (
-    build_message,
-    load_config,
-    mask_config,
-    save_config,
-    serialize_notification,
-    validate_config,
-)
-from app.notifiers.base import SendResult
-from app.notifiers.factory import build_notifiers, target_for
 from app.policies import (
     default_policies,
     effective_settings,
     load_policies,
     save_policies,
 )
-from app.schemas import LoginRequest, LoginResponse, NotificationTestRequest, iso_utc
+from app.schemas import LoginRequest, LoginResponse, iso_utc
 from app.schemas.admin import IncidentItem
 from app.security import hash_secret, new_client_secret
 from app.services import serializers
@@ -108,145 +98,6 @@ def ack_incident(
     )
     db.commit()
     return serializers.incident_item(incident)
-
-
-# --------------------------------------------------------------------------
-# 通知配置与记录
-# --------------------------------------------------------------------------
-
-
-@router.get("/notifications")
-def get_notifications(
-    db: Session = Depends(get_session),
-    _actor: str = Depends(require_admin),
-) -> dict[str, Any]:
-    config = load_config(db)
-    records = db.scalars(
-        select(Notification).order_by(Notification.id.desc()).limit(20)
-    ).all()
-    return {
-        "config": mask_config(config),
-        "records": [serialize_notification(record) for record in records],
-    }
-
-
-@router.put("/notifications")
-def update_notifications(
-    payload: dict[str, Any] = Body(...),
-    db: Session = Depends(get_session),
-    actor: str = Depends(require_admin),
-) -> dict[str, Any]:
-    try:
-        config = save_config(db, payload)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-
-    db.add(
-        AuditLog(
-            actor=actor,
-            action="update_notifications",
-            target="notifications",
-            ts=utcnow(),
-            detail=json.dumps(
-                {
-                    "enabled": [
-                        channel
-                        for channel in ("feishu", "wecom", "email")
-                        if config[channel]["enabled"]
-                    ],
-                    "rate_limit_per_hour": config["rate_limit_per_hour"],
-                },
-                ensure_ascii=False,
-            ),
-        )
-    )
-    db.commit()
-    return {"config": mask_config(config)}
-
-
-@router.post("/notifications/test")
-def test_notifications(
-    payload: NotificationTestRequest,
-    db: Session = Depends(get_session),
-    actor: str = Depends(require_admin),
-) -> dict[str, Any]:
-    config = load_config(db)
-    try:
-        validate_config(config)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
-        ) from exc
-
-    notifiers = build_notifiers(config)
-    selected = (
-        notifiers
-        if payload.channel == "all"
-        else [notifier for notifier in notifiers if notifier.channel == payload.channel]
-    )
-    if not selected:
-        detail = (
-            "没有已启用的通知渠道"
-            if payload.channel == "all"
-            else f"渠道 {payload.channel} 未配置或未启用"
-        )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
-
-    now = utcnow()
-    results: list[dict[str, Any]] = []
-    for notifier in selected:
-        message = build_message(None, "test", now, None, notifier.channel)
-        try:
-            result = notifier.send(message)
-        except Exception as exc:  # noqa: BLE001 - 单渠道异常不影响其他渠道
-            result = SendResult(False, f"{type(exc).__name__}: 发送异常")
-
-        record = Notification(
-            incident_id=None,
-            client_id="",
-            channel=notifier.channel,
-            target=target_for(notifier.channel, config),
-            kind="test",
-            status="sent" if result.ok else "failed",
-            attempts=1,
-            last_error=None if result.ok else result.error[:500],
-            next_attempt_at=None if result.ok else now + timedelta(seconds=60),
-            created_at=now,
-            sent_at=now if result.ok else None,
-        )
-        db.add(record)
-        results.append(
-            {"channel": notifier.channel, "ok": result.ok, "error": result.error}
-        )
-
-    db.add(
-        AuditLog(
-            actor=actor,
-            action="test_notification",
-            target=payload.channel,
-            ts=utcnow(),
-            detail=json.dumps(
-                [{"channel": item["channel"], "ok": item["ok"]} for item in results],
-                ensure_ascii=False,
-            ),
-        )
-    )
-    db.commit()
-    return {"results": results}
-
-
-@router.get("/notifications/records")
-def list_notification_records(
-    limit: int = Query(default=100, ge=1, le=500),
-    db: Session = Depends(get_session),
-    _actor: str = Depends(require_admin),
-) -> dict[str, Any]:
-    records = db.scalars(
-        select(Notification).order_by(Notification.id.desc()).limit(limit)
-    ).all()
-    return {"records": [serialize_notification(record) for record in records]}
 
 
 # --------------------------------------------------------------------------

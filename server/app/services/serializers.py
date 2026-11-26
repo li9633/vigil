@@ -6,7 +6,7 @@ import json
 from datetime import datetime
 from typing import Any
 
-from app.models import Client, ClientEvent, Heartbeat, Incident
+from app.models import Client, ClientEvent, Heartbeat, Incident, Notification
 from app.schemas import iso_utc
 from app.schemas.admin import (
     ClientSummary,
@@ -71,6 +71,23 @@ def incident_item(incident: Incident) -> IncidentItem:
         summary=incident.summary,
         evidence=evidence if isinstance(evidence, dict) else {},
     )
+
+
+def notification_item(record: Notification) -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "incident_id": record.incident_id,
+        "client_id": record.client_id,
+        "channel": record.channel,
+        "target": record.target,
+        "kind": record.kind,
+        "status": record.status,
+        "attempts": record.attempts,
+        "last_error": record.last_error,
+        "next_attempt_at": iso_utc(record.next_attempt_at),
+        "created_at": iso_utc(record.created_at),
+        "sent_at": iso_utc(record.sent_at),
+    }
 
 
 def heartbeat_item(heartbeat: Heartbeat) -> HeartbeatItem:

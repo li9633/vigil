@@ -9,15 +9,15 @@ from datetime import timedelta
 from app.db import init_db, init_engine, session_scope, utcnow
 from app.diskguard import check_disk, disk_path
 from app.logstore import configure_logging, log_event
-from app.notifications import (
+from app.policies import effective_settings
+from app.retention import purge_expired
+from app.security import purge_expired_nonces
+from app.services.notification_service import (
     load_config,
     pending_recovery_incidents,
     retry_failed,
     send_incident,
 )
-from app.policies import effective_settings
-from app.retention import purge_expired
-from app.security import purge_expired_nonces
 from app.settings import Settings, get_settings
 from app.state_machine import STATE_DOWN, STATE_RECOVERED, scan_guards, scan_once
 

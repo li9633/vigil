@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from app.notifiers.base import NotificationMessage, Notifier, SendResult
+from app.domain.notifications.ports import NotificationMessage, Notifier, SendResult
 
 TIMEOUT_SECONDS = 10.0
 

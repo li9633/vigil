@@ -7,12 +7,11 @@ from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlparse
 
-from app.notifiers.base import Notifier
-from app.notifiers.email import EmailNotifier
-from app.notifiers.feishu import FeishuNotifier
-from app.notifiers.wecom import WeComNotifier
-
-CHANNELS = ("feishu", "wecom", "email")
+from app.adapters.notifiers.email import EmailNotifier
+from app.adapters.notifiers.feishu import FeishuNotifier
+from app.adapters.notifiers.wecom import WeComNotifier
+from app.domain.notifications.config import CHANNELS
+from app.domain.notifications.ports import Notifier
 
 
 def parse_recipients(value: str | Iterable[str] | None) -> list[str]:
@@ -35,10 +34,6 @@ def target_for(channel: str, config: dict[str, Any]) -> str:
     if channel == "email":
         return ", ".join(parse_recipients(section.get("to")))
     return webhook_target(str(section.get("webhook") or ""))
-
-
-def _enabled(config: dict[str, Any], channel: str) -> bool:
-    return bool((config.get(channel) or {}).get("enabled"))
 
 
 def build_notifier(channel: str, config: dict[str, Any]) -> Notifier | None:

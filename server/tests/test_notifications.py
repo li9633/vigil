@@ -4,24 +4,26 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from email.message import EmailMessage
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from app.adapters.notifiers.base import NotificationMessage, Notifier, SendResult
+from app.adapters.notifiers.email import EmailNotifier
+from app.adapters.notifiers.feishu import FeishuNotifier
+from app.adapters.notifiers.wecom import WeComNotifier
+from app.adapters.smtp import SmtpClient, SmtplibClient
 from app.db import session_scope, utcnow
 from app.models import AuditLog, Client, ClientEvent, Heartbeat, Incident, Notification
-from app.notifications import (
+from app.services.notification_service import (
     load_config,
     retry_failed,
     send_incident,
     send_system_alert,
 )
-from app.notifiers.base import NotificationMessage, Notifier, SendResult
-from app.notifiers.email import EmailNotifier
-from app.notifiers.feishu import FeishuNotifier
-from app.notifiers.wecom import WeComNotifier
 from app.worker import _dispatch_notifications
 
 ENV_NAMES = (
@@ -89,7 +91,7 @@ def test_feishu_payload_and_success(monkeypatch: pytest.MonkeyPatch) -> None:
         captured.update(url=url, payload=json, timeout=timeout)
         return FakeResponse({"code": 0, "msg": "success"})
 
-    monkeypatch.setattr("app.notifiers.feishu.httpx.post", fake_post)
+    monkeypatch.setattr("app.adapters.notifiers.feishu.httpx.post", fake_post)
     notifier = FeishuNotifier("https://open.feishu.cn/open-apis/bot/v2/hook/token")
 
     result = notifier.send(NotificationMessage(title="[Vigil] 离线", body="正文"))
@@ -105,7 +107,7 @@ def test_feishu_payload_and_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_feishu_legacy_status_code_and_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "app.notifiers.feishu.httpx.post",
+        "app.adapters.notifiers.feishu.httpx.post",
         lambda *args, **kwargs: FakeResponse({"StatusCode": 0, "StatusMessage": "success"}),
     )
     assert FeishuNotifier("https://example.com/hook").send(
@@ -113,7 +115,7 @@ def test_feishu_legacy_status_code_and_failure(monkeypatch: pytest.MonkeyPatch) 
     ).ok is True
 
     monkeypatch.setattr(
-        "app.notifiers.feishu.httpx.post",
+        "app.adapters.notifiers.feishu.httpx.post",
         lambda *args, **kwargs: FakeResponse({"code": 19021, "msg": "sign match fail"}),
     )
     failed = FeishuNotifier("https://example.com/hook").send(
@@ -127,7 +129,7 @@ def test_feishu_network_error_does_not_leak_webhook(monkeypatch: pytest.MonkeyPa
     def fake_post(*args: Any, **kwargs: Any) -> FakeResponse:
         raise RuntimeError("connect failed https://open.feishu.cn/secret-token")
 
-    monkeypatch.setattr("app.notifiers.feishu.httpx.post", fake_post)
+    monkeypatch.setattr("app.adapters.notifiers.feishu.httpx.post", fake_post)
     result = FeishuNotifier("https://open.feishu.cn/secret-token").send(
         NotificationMessage(title="t", body="b")
     )
@@ -142,7 +144,7 @@ def test_wecom_payload_and_judgement(monkeypatch: pytest.MonkeyPatch) -> None:
         captured.update(payload=json, timeout=timeout)
         return FakeResponse({"errcode": 0, "errmsg": "ok"})
 
-    monkeypatch.setattr("app.notifiers.wecom.httpx.post", fake_post)
+    monkeypatch.setattr("app.adapters.notifiers.wecom.httpx.post", fake_post)
     notifier = WeComNotifier("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=x")
 
     result = notifier.send(NotificationMessage(title="[Vigil] 离线", body="正文"))
@@ -152,7 +154,7 @@ def test_wecom_payload_and_judgement(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured["payload"]["markdown"]["content"] == "**[Vigil] 离线**\n正文"
 
     monkeypatch.setattr(
-        "app.notifiers.wecom.httpx.post",
+        "app.adapters.notifiers.wecom.httpx.post",
         lambda *args, **kwargs: FakeResponse({"errcode": 93000, "errmsg": "invalid webhook"}),
     )
     failed = notifier.send(NotificationMessage(title="t", body="b"))
@@ -165,26 +167,39 @@ def test_wecom_payload_and_judgement(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_email_ssl_sends_utf8_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent: dict[str, Any] = {}
+class RecordingSmtp(SmtpClient):
+    def __init__(self, error: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.error = error
 
-    class FakeSMTPSSL:
-        def __init__(self, host: str, port: int, timeout: float | None = None) -> None:
-            sent.update(host=host, port=port, timeout=timeout)
+    def send(
+        self,
+        *,
+        host: str,
+        port: int,
+        security: str,
+        username: str,
+        password: str,
+        message: Any,
+        timeout: float = 10.0,
+    ) -> None:
+        self.calls.append(
+            {
+                "host": host,
+                "port": port,
+                "security": security,
+                "username": username,
+                "password": password,
+                "message": message,
+                "timeout": timeout,
+            }
+        )
+        if self.error is not None:
+            raise self.error
 
-        def __enter__(self) -> FakeSMTPSSL:
-            return self
 
-        def __exit__(self, *exc: Any) -> bool:
-            return False
-
-        def login(self, username: str, password: str) -> None:
-            sent["login"] = (username, password)
-
-        def send_message(self, message: Any) -> None:
-            sent["message"] = message
-
-    monkeypatch.setattr("app.notifiers.email.smtplib.SMTP_SSL", FakeSMTPSSL)
+def test_email_ssl_sends_utf8_message() -> None:
+    smtp = RecordingSmtp()
     notifier = EmailNotifier(
         host="smtp.example.com",
         port=465,
@@ -192,21 +207,48 @@ def test_email_ssl_sends_utf8_message(monkeypatch: pytest.MonkeyPatch) -> None:
         password="pass",
         sender="vigil@example.com",
         recipients=["a@example.com", "b@example.com"],
+        smtp_client=smtp,
     )
 
     result = notifier.send(NotificationMessage(title="[Vigil] 客户端离线", body="正文内容"))
 
     assert result.ok is True
-    assert sent["host"] == "smtp.example.com"
-    assert sent["login"] == ("user", "pass")
-    message = sent["message"]
+    call = smtp.calls[0]
+    assert call["host"] == "smtp.example.com"
+    assert call["security"] == "ssl"
+    assert (call["username"], call["password"]) == ("user", "pass")
+    message = call["message"]
     assert message["To"] == "a@example.com, b@example.com"
     assert message["Subject"] == "[Vigil] 客户端离线"
     assert "=?utf-8?" in message.as_string().lower()
     assert message.get_content().strip() == "正文内容"
 
 
-def test_email_starttls_and_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_email_starttls_and_failure() -> None:
+    smtp = RecordingSmtp()
+    notifier = EmailNotifier(
+        host="smtp.example.com",
+        port=587,
+        sender="vigil@example.com",
+        recipients=["a@example.com"],
+        security="starttls",
+        smtp_client=smtp,
+    )
+    assert notifier.send(NotificationMessage(title="t", body="b")).ok is True
+    assert smtp.calls[0]["security"] == "starttls"
+
+    broken = RecordingSmtp(RuntimeError("smtp auth failed for pass"))
+    failed = EmailNotifier(
+        host="smtp.example.com",
+        sender="vigil@example.com",
+        recipients=["a@example.com"],
+        smtp_client=broken,
+    ).send(NotificationMessage(title="t", body="b"))
+    assert failed.ok is False
+    assert "pass" not in failed.error
+
+
+def test_smtplib_client_connection_modes(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: dict[str, Any] = {"starttls": 0}
 
     class FakeSMTP:
@@ -228,26 +270,36 @@ def test_email_starttls_and_failure(monkeypatch: pytest.MonkeyPatch) -> None:
         def send_message(self, message: Any) -> None:
             calls["sent"] = True
 
-    monkeypatch.setattr("app.notifiers.email.smtplib.SMTP", FakeSMTP)
-    notifier = EmailNotifier(
+    class FakeSMTPSSL(FakeSMTP):
+        pass
+
+    monkeypatch.setattr("app.adapters.smtp.smtplib.SMTP_SSL", FakeSMTPSSL)
+    monkeypatch.setattr("app.adapters.smtp.smtplib.SMTP", FakeSMTP)
+    message = EmailMessage()
+    client = SmtplibClient()
+
+    client.send(
+        host="smtp.example.com",
+        port=465,
+        security="ssl",
+        username="user",
+        password="pass",
+        message=message,
+    )
+    assert calls["sent"] is True
+    assert calls["login"] == ("user", "pass")
+
+    calls["sent"] = False
+    client.send(
         host="smtp.example.com",
         port=587,
-        sender="vigil@example.com",
-        recipients=["a@example.com"],
         security="starttls",
+        username="",
+        password="",
+        message=message,
     )
-    assert notifier.send(NotificationMessage(title="t", body="b")).ok is True
     assert calls["starttls"] == 1
     assert calls["sent"] is True
-
-    class BrokenSMTP(FakeSMTP):
-        def send_message(self, message: Any) -> None:
-            raise RuntimeError("smtp auth failed for pass")
-
-    monkeypatch.setattr("app.notifiers.email.smtplib.SMTP", BrokenSMTP)
-    failed = notifier.send(NotificationMessage(title="t", body="b"))
-    assert failed.ok is False
-    assert "pass" not in failed.error
 
 
 # --------------------------------------------------------------------------
@@ -354,7 +406,7 @@ def test_test_notification_endpoint(
     )
 
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.api_admin.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
 
     response = client.post("/api/v1/admin/notifications/test", json={"channel": "feishu"})
     assert response.status_code == 200, response.text
@@ -422,7 +474,7 @@ def test_down_notification_only_once(
 ) -> None:
     incident_id = _seed_incident()
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
 
     with session_scope() as db:
         incident = db.get(Incident, incident_id)
@@ -443,7 +495,7 @@ def test_recovery_requires_sent_down_and_sends_once(
     db_ready: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     now = utcnow()
 
     # 未发过 DOWN：不发恢复
@@ -526,7 +578,7 @@ def test_flapping_suppresses_and_sends_single_summary(
     db_ready: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     now = utcnow()
 
     with session_scope() as db:
@@ -627,7 +679,7 @@ def test_guard_down_notification_lists_failed_checks(
 ) -> None:
     incident_id = _seed_guard_incident()
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
 
     with session_scope() as db:
         send_incident(db, db.get(Incident, incident_id), "down", utcnow(), CONFIG)
@@ -646,7 +698,7 @@ def test_recovery_notification_includes_actions_reboot_and_snippet(
 ) -> None:
     incident_id = _seed_guard_incident(recovered=True)
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     now = utcnow()
 
     with session_scope() as db:
@@ -702,7 +754,7 @@ def test_rate_limit_marks_skipped(    db_ready: None, monkeypatch: pytest.Monkey
 ) -> None:
     incident_id = _seed_incident()
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     now = utcnow()
 
     with session_scope() as db:
@@ -749,7 +801,7 @@ def test_channel_failure_does_not_block_others(
     incident_id = _seed_incident()
     recorder = RecordingNotifier()
     monkeypatch.setattr(
-        "app.notifications.build_notifiers",
+        "app.services.notification_service.build_notifiers",
         lambda config: [FailingNotifier(), recorder],
     )
 
@@ -770,7 +822,7 @@ def test_retry_failed_increments_attempts(
 ) -> None:
     incident_id = _seed_incident()
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     now = utcnow()
 
     with session_scope() as db:
@@ -805,7 +857,7 @@ def test_retry_stops_after_three_attempts(
 ) -> None:
     incident_id = _seed_incident(notified_at=utcnow())
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     now = utcnow()
 
     with session_scope() as db:
@@ -837,7 +889,7 @@ def test_retry_exhausted_moves_to_dead_and_alerts(
     incident_id = _seed_incident(notified_at=utcnow())
     recorder = RecordingNotifier()
     monkeypatch.setattr(
-        "app.notifications.build_notifiers",
+        "app.services.notification_service.build_notifiers",
         lambda config: [FailingNotifier(), recorder],
     )
     now = utcnow()
@@ -886,7 +938,7 @@ def test_retry_marks_dead_when_channel_removed(
 ) -> None:
     incident_id = _seed_incident(notified_at=utcnow())
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     now = utcnow()
 
     with session_scope() as db:
@@ -917,7 +969,7 @@ def test_system_alert_failure_is_dead_letter(
     db_ready: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        "app.notifications.build_notifiers", lambda config: [FailingNotifier()]
+        "app.services.notification_service.build_notifiers", lambda config: [FailingNotifier()]
     )
     now = utcnow()
 
@@ -940,7 +992,7 @@ def test_worker_dispatches_recovery_without_touched(
         recovered_at=now - timedelta(seconds=10),
     )
     recorder = RecordingNotifier()
-    monkeypatch.setattr("app.notifications.build_notifiers", lambda config: [recorder])
+    monkeypatch.setattr("app.services.notification_service.build_notifiers", lambda config: [recorder])
     monkeypatch.setattr("app.worker.load_config", lambda db: CONFIG)
 
     with session_scope() as db:
