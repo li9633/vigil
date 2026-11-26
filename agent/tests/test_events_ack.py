@@ -3,7 +3,7 @@
 import tempfile
 import unittest
 
-from vigil_agent.main import AgentApp, _acked_seqs
+from vigil_agent.app import AgentApp, _acked_seqs
 from vigil_agent.spool import EventSpool
 
 

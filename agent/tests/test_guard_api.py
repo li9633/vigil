@@ -10,10 +10,10 @@ import time
 import unittest
 import uuid
 
+from vigil_agent.api import create_server
+from vigil_agent.app import AgentApp
 from vigil_agent.config import default_config
 from vigil_agent.guards.model import migrate_config
-from vigil_agent.httpd import create_server
-from vigil_agent.main import AgentApp
 
 
 def make_guard(name="测试守护", probe="process", interval=30, enabled=True):

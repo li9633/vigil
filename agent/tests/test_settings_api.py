@@ -8,10 +8,10 @@ import threading
 import time
 import unittest
 
+from vigil_agent.api import create_server
+from vigil_agent.app import AgentApp
 from vigil_agent.config import default_config
 from vigil_agent.guards.model import migrate_config
-from vigil_agent.httpd import create_server
-from vigil_agent.main import AgentApp
 
 
 def _build_app(root):

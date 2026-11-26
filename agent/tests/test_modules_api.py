@@ -9,11 +9,11 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from vigil_agent.api import create_server
+from vigil_agent.app import AgentApp
 from vigil_agent.config import default_config
 from vigil_agent.detect.script import delete_script, inspect_scripts, save_script
 from vigil_agent.guards.model import migrate_config
-from vigil_agent.httpd import create_server
-from vigil_agent.main import AgentApp
 
 BODY = "#!/bin/sh\necho '{\"evidence\":{\"ok\":true}}'\nexit 0\n"
 

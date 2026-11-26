@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 
-from vigil_agent.httpd import create_server
+from vigil_agent.api import create_server
 
 
 class HttpdTestBase(unittest.TestCase):

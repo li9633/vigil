@@ -1,10 +1,4 @@
-"""客户端本地 HTTP 服务：管理员令牌登录、会话 Cookie、最小 API 与静态资源。
-
-- 默认监听 0.0.0.0:8787（配置可改），生产环境应只绑定 LAN 桥接地址
-- 登录失败按 IP 做内存限流
-- 静态资源目录默认 /usr/share/vigil/www，不存在时返回占位页
-- 静态文件路径经 realpath 校验，防目录穿越
-"""
+"""本地 HTTP 请求处理：路由分发、会话鉴权、响应封装与静态资源。"""
 
 import hmac
 import json
@@ -13,10 +7,11 @@ import mimetypes
 import os
 import re
 import secrets
-import threading
 import time
 import urllib.parse
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
+from .static import PLACEHOLDER_HTML, resolve_static_path
 
 LOGGER = logging.getLogger("vigil.httpd")
 
@@ -26,87 +21,6 @@ DEFAULT_EVENT_LIMIT = 50
 MAX_LIMIT = 500
 
 ACTION_PATH_RE = re.compile(r"^/api/actions/([A-Za-z0-9_]+)$")
-
-# 提示：状态不能只靠颜色，占位页同样用文字说明
-PLACEHOLDER_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vigil 客户端</title>
-<style>
-  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0;
-         background: #0f172a; color: #e2e8f0; display: flex; min-height: 100vh;
-         align-items: center; justify-content: center; }
-  main { max-width: 480px; padding: 32px; }
-  h1 { font-size: 22px; margin: 0 0 12px; }
-  p { line-height: 1.7; color: #94a3b8; margin: 0 0 10px; }
-  code { background: #1e293b; padding: 2px 6px; border-radius: 4px; color: #cbd5e1; }
-</style>
-</head>
-<body>
-<main>
-  <h1>Vigil 客户端 UI 未安装</h1>
-  <p>agent 已运行，但未找到前端静态资源目录
-     <code>/usr/share/vigil/www</code>。</p>
-  <p>请安装完整发行包，或把前端构建产物放到该目录后刷新页面。</p>
-  <p>本地 API 仍可正常使用。</p>
-</main>
-</body>
-</html>
-"""
-
-
-class VigilHTTPServer(ThreadingHTTPServer):
-    """携带配置与内存会话的 HTTP 服务。"""
-
-    daemon_threads = True
-    allow_reuse_address = True
-
-    def __init__(
-        self,
-        address,
-        token,
-        www_root,
-        status_provider=None,
-        checks_provider=None,
-        events_provider=None,
-        logs_provider=None,
-        action_handler=None,
-        session_ttl=43200,
-        login_max_failures=5,
-        login_window=60,
-        guards_provider=None,
-        guards_handler=None,
-        modules_provider=None,
-        script_import_handler=None,
-        script_delete_handler=None,
-        settings_provider=None,
-        settings_handler=None,
-        logs_export_provider=None,
-    ):
-        super().__init__(address, VigilRequestHandler)
-        self.token = token or ""
-        self.www_root = www_root
-        self.status_provider = status_provider
-        self.checks_provider = checks_provider
-        self.events_provider = events_provider
-        self.logs_provider = logs_provider
-        self.action_handler = action_handler
-        self.guards_provider = guards_provider
-        self.guards_handler = guards_handler
-        self.modules_provider = modules_provider
-        self.script_import_handler = script_import_handler
-        self.script_delete_handler = script_delete_handler
-        self.settings_provider = settings_provider
-        self.settings_handler = settings_handler
-        self.logs_export_provider = logs_export_provider
-        self.session_ttl = int(session_ttl)
-        self.login_max_failures = int(login_max_failures)
-        self.login_window = int(login_window)
-        self.sessions = {}
-        self.login_failures = {}
-        self.lock = threading.Lock()
 
 
 class VigilRequestHandler(BaseHTTPRequestHandler):
@@ -468,27 +382,13 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             self._send_html(200, PLACEHOLDER_HTML)
             return
 
-        relative = urllib.parse.unquote(path.lstrip("/"))
-        if not relative:
-            relative = "index.html"
-        elif relative.endswith("/"):
-            relative += "index.html"
-
-        root_real = os.path.realpath(root)
-        full_path = os.path.realpath(os.path.join(root_real, relative))
-        if full_path != root_real and not full_path.startswith(root_real + os.sep):
+        full_path, error = resolve_static_path(root, path)
+        if error == "forbidden":
             self._send_json(403, {"error": "forbidden"})
             return
-        if os.path.isdir(full_path):
-            full_path = os.path.join(full_path, "index.html")
-        if not os.path.isfile(full_path):
-            # SPA 深链接（/guards、/login 等）回退到 index.html；带扩展名的资源仍 404
-            index_path = os.path.join(root_real, "index.html")
-            if "." not in os.path.basename(relative) and os.path.isfile(index_path):
-                full_path = index_path
-            else:
-                self._send_json(404, {"error": "not_found"})
-                return
+        if full_path is None:
+            self._send_json(404, {"error": "not_found"})
+            return
 
         content_type = mimetypes.guess_type(full_path)[0] or "application/octet-stream"
         try:
@@ -586,49 +486,3 @@ def _parse_log_filters(query):
         "recovery_id": first("recovery_id"),
         "since": since,
     }
-
-
-def create_server(
-    bind,
-    port,
-    token,
-    www_root,
-    status_provider=None,
-    checks_provider=None,
-    events_provider=None,
-    logs_provider=None,
-    action_handler=None,
-    session_ttl=43200,
-    login_max_failures=5,
-    login_window=60,
-    guards_provider=None,
-    guards_handler=None,
-    modules_provider=None,
-    script_import_handler=None,
-    script_delete_handler=None,
-    settings_provider=None,
-    settings_handler=None,
-    logs_export_provider=None,
-):
-    """创建（未启动的）HTTP 服务实例。"""
-    return VigilHTTPServer(
-        (bind, int(port)),
-        token,
-        www_root,
-        status_provider=status_provider,
-        checks_provider=checks_provider,
-        events_provider=events_provider,
-        logs_provider=logs_provider,
-        action_handler=action_handler,
-        session_ttl=session_ttl,
-        login_max_failures=login_max_failures,
-        login_window=login_window,
-        guards_provider=guards_provider,
-        guards_handler=guards_handler,
-        modules_provider=modules_provider,
-        script_import_handler=script_import_handler,
-        script_delete_handler=script_delete_handler,
-        settings_provider=settings_provider,
-        settings_handler=settings_handler,
-        logs_export_provider=logs_export_provider,
-    )
