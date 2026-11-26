@@ -145,11 +145,20 @@ class EventSpool:
             entry.setdefault("ts", int(time.time()))
 
             line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
-            with open(self.path, "a", encoding="utf-8") as handle:
-                handle.write(line)
-                handle.write("\n")
+            try:
+                with open(self.path, "a", encoding="utf-8") as handle:
+                    handle.write(line)
+                    handle.write("\n")
+            except OSError:
+                # 磁盘满/只读：丢弃本条并计数，不能中断检测主循环
+                self._meta["dropped"] = self._meta.get("dropped", 0) + 1
+                self._save_meta()
+                return dict(entry)
             self._entries.append(entry)
-            self._enforce_limits()
+            try:
+                self._enforce_limits()
+            except OSError:
+                pass
             self._save_meta()
             return dict(entry)
 
@@ -181,8 +190,14 @@ class EventSpool:
             remaining = [entry for entry in self._entries if entry.get("seq") not in acked]
             removed = len(self._entries) - len(remaining)
             if removed:
+                original = self._entries
                 self._entries = remaining
-                self._rewrite()
+                try:
+                    self._rewrite()
+                except OSError:
+                    # 重写失败时回退内存状态，保留原文件，等待下一轮重试
+                    self._entries = original
+                    return 0
                 self._save_meta()
             return removed
 
