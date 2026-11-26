@@ -88,4 +88,4 @@ def registered(client: TestClient) -> dict[str, Any]:
         },
     )
     assert response.status_code == 200, response.text
-    return response.json()
+    return response.json()["data"]

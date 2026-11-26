@@ -113,6 +113,16 @@ def _parse_json(raw):
         return {}
 
 
+def _unwrap_envelope(payload):
+    """解包服务端统一响应 {code, message, data}；旧格式原样返回。"""
+    if isinstance(payload, dict) and isinstance(payload.get("code"), str):
+        if payload.get("code") == "ok" and "data" in payload:
+            data = payload.get("data")
+            return data if data is not None else {}
+        return {}
+    return payload
+
+
 def _header(headers, name):
     if not headers:
         return ""
@@ -241,7 +251,7 @@ class Transport:
                 "ok": ok,
                 "status": status,
                 "headers": resp_headers or {},
-                "body": parsed,
+                "body": _unwrap_envelope(parsed),
                 "error": "" if ok else _extract_error(parsed, status),
             }
         return _error_result(last_error or "请求失败")

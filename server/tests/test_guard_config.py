@@ -91,7 +91,7 @@ def test_guards_crud_and_delivery(
     legacy = _get_config(client, auth, registered)
     assert legacy.status_code == 200
     legacy_etag = legacy.headers["ETag"]
-    assert "guards" not in legacy.json()
+    assert "guards" not in legacy.json()["data"]
 
     # 整体写入（顺序故意打乱），响应按 guard_id 排序
     payload = {"guards": [_guard(GUARD_A_ID), _guard(GUARD_B_ID, "DNS 异常恢复")]}
@@ -121,7 +121,7 @@ def test_guards_crud_and_delivery(
     # 下发：存在配置时附带 guards，且 ETag 随内容变化
     delivered = _get_config(client, auth, registered)
     assert delivered.status_code == 200
-    delivered_body = delivered.json()
+    delivered_body = delivered.json()["data"]
     assert [item["id"] for item in delivered_body["guards"]] == [
         GUARD_B_ID,
         GUARD_A_ID,
@@ -134,7 +134,7 @@ def test_guards_crud_and_delivery(
     assert _get_config(client, auth, registered, delivered_etag).status_code == 304
     stale = _get_config(client, auth, registered, legacy_etag)
     assert stale.status_code == 200
-    assert "guards" in stale.json()
+    assert "guards" in stale.json()["data"]
 
     # 整体替换：只保留 A 且改名，B 被删除
     replaced = client.put(
@@ -147,7 +147,7 @@ def test_guards_crud_and_delivery(
 
     replaced_config = _get_config(client, auth, registered)
     assert replaced_config.headers["ETag"] != delivered_etag
-    assert [item["id"] for item in replaced_config.json()["guards"]] == [GUARD_A_ID]
+    assert [item["id"] for item in replaced_config.json()["data"]["guards"]] == [GUARD_A_ID]
 
     with session_scope() as db:
         actions = db.scalars(select(AuditLog.action)).all()
@@ -174,7 +174,7 @@ def test_guards_delete_restores_legacy_config(
         ).status_code
         == 200
     )
-    assert "guards" in _get_config(client, auth, registered).json()
+    assert "guards" in _get_config(client, auth, registered).json()["data"]
 
     cleared = client.delete(_guards_url(client_id))
     assert cleared.status_code == 200
@@ -187,7 +187,7 @@ def test_guards_delete_restores_legacy_config(
     # 删除后下发回退到无 guards 的旧结构，ETag 与最初一致
     fallback = _get_config(client, auth, registered)
     assert fallback.status_code == 200
-    assert "guards" not in fallback.json()
+    assert "guards" not in fallback.json()["data"]
     assert fallback.headers["ETag"] == legacy_etag
     assert _get_config(client, auth, registered, legacy_etag).status_code == 304
 
@@ -227,14 +227,14 @@ def test_guards_are_per_client(
         },
     )
     assert other.status_code == 200
-    other_registered = other.json()
+    other_registered = other.json()["data"]
 
     other_config = client.get(
         "/api/v1/config",
         headers=auth(other_registered["client_id"], other_registered["secret"]),
     )
     assert other_config.status_code == 200
-    assert "guards" not in other_config.json()
+    assert "guards" not in other_config.json()["data"]
 
 
 def test_guards_invalid_payloads(

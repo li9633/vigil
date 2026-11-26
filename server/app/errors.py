@@ -10,10 +10,17 @@ class AppError(Exception):
 
     code = "error"
 
-    def __init__(self, message: str, *, details: Any = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
+        self.headers = headers
 
 
 class ValidationError(AppError):
@@ -39,8 +46,15 @@ class ConflictError(AppError):
 class RateLimitedError(AppError):
     code = "rate_limited"
 
-    def __init__(self, message: str, *, retry_after: int, details: Any = None) -> None:
-        super().__init__(message, details=details)
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after: int,
+        details: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(message, details=details, headers=headers)
         self.retry_after = retry_after
 
 

@@ -7,11 +7,11 @@ import secrets
 import time
 from datetime import datetime, timedelta
 
-from fastapi import HTTPException, status
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.errors import ForbiddenError, UnauthorizedError
 from app.models import Client, Nonce
 from app.settings import Settings
 
@@ -39,25 +39,18 @@ def constant_time_equals(left: str, right: str) -> bool:
 
 def verify_bootstrap(provided: str | None, expected: str) -> None:
     if not provided or not constant_time_equals(provided, expected):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="bootstrap token 无效",
-        )
+        raise UnauthorizedError("bootstrap token 无效")
 
 
 def parse_bearer(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 Bearer 凭证",
-            headers={"WWW-Authenticate": "Bearer"},
+        raise UnauthorizedError(
+            "缺少 Bearer 凭证", headers={"WWW-Authenticate": "Bearer"}
         )
     secret = authorization[7:].strip()
     if not secret:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 Bearer 凭证",
-            headers={"WWW-Authenticate": "Bearer"},
+        raise UnauthorizedError(
+            "缺少 Bearer 凭证", headers={"WWW-Authenticate": "Bearer"}
         )
     return secret
 
@@ -66,28 +59,19 @@ def _parse_timestamp(raw: str | None) -> int:
     try:
         return int(raw or "")
     except (TypeError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="时间戳无效",
-        ) from None
+        raise UnauthorizedError("时间戳无效") from None
 
 
 def consume_nonce(db: Session, nonce: str | None, client_id: str, now: datetime) -> None:
     """持久化 nonce；重复出现视为重放。"""
     if not nonce:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 nonce",
-        )
+        raise UnauthorizedError("缺少 nonce")
     db.add(Nonce(nonce=nonce, client_id=client_id, seen_at=now))
     try:
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="nonce 重放",
-        ) from None
+        raise UnauthorizedError("nonce 重放") from None
 
 
 def purge_expired_nonces(db: Session, now: datetime, ttl_seconds: int) -> int:
@@ -109,30 +93,19 @@ def authenticate_client(
 ) -> Client:
     """校验收包头：客户端 ID、secret 哈希、时间窗、nonce。"""
     if not client_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="缺少 X-Vigil-Client",
-        )
+        raise UnauthorizedError("缺少 X-Vigil-Client")
     request_ts = _parse_timestamp(timestamp)
     if abs(time.time() - request_ts) > settings.auth_window_seconds:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="时间戳超出允许窗口",
-        )
+        raise UnauthorizedError("时间戳超出允许窗口")
 
     client = db.scalars(select(Client).where(Client.client_id == client_id)).one_or_none()
     secret = parse_bearer(authorization)
     if client is None or not constant_time_equals(hash_secret(secret), client.secret_sha256):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="客户端凭证无效",
-            headers={"WWW-Authenticate": "Bearer"},
+        raise UnauthorizedError(
+            "客户端凭证无效", headers={"WWW-Authenticate": "Bearer"}
         )
     if not client.enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="客户端已被禁用",
-        )
+        raise ForbiddenError("客户端已被禁用")
 
     consume_nonce(db, nonce, client.client_id, now)
     return client

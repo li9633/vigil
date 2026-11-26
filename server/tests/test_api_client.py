@@ -40,7 +40,7 @@ def test_register_success(client: TestClient) -> None:
         },
     )
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert data["client_id"].startswith("cl_")
     assert len(data["secret"]) >= 32
     assert data["heartbeat_interval"] == 30
@@ -109,7 +109,7 @@ def test_heartbeat_ok(
         json=_heartbeat_body(registered["client_id"]),
     )
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert data["ok"] is True
     assert data["actions_enabled"] is True
     assert len(data["config_etag"]) == 32
@@ -133,7 +133,7 @@ def test_beacon_ok(
         },
     )
     assert response.status_code == 200
-    data = response.json()
+    data = response.json()["data"]
     assert data["ok"] is True
     assert isinstance(data["server_time"], int)
 
@@ -159,7 +159,7 @@ def test_events_idempotent(
         json=payload,
     )
     assert first.status_code == 200
-    assert first.json()["acked"] == ["evt-1"]
+    assert first.json()["data"]["acked"] == ["evt-1"]
 
     second = client.post(
         "/api/v1/events",
@@ -167,7 +167,7 @@ def test_events_idempotent(
         json=payload,
     )
     assert second.status_code == 200
-    assert second.json()["acked"] == ["evt-1"]
+    assert second.json()["data"]["acked"] == ["evt-1"]
 
     with session_scope() as db:
         count = db.scalar(select(func.count()).select_from(ClientEvent))
@@ -196,7 +196,7 @@ def test_config_etag(
     response = client.get("/api/v1/config", headers=headers)
     assert response.status_code == 200
     etag = response.headers["ETag"]
-    body = response.json()
+    body = response.json()["data"]
     assert body["heartbeat_interval"] == 30
     assert body["actions_enabled"] is True
     assert body["thresholds"]["suspect_seconds"] == 90

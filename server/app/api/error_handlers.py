@@ -66,13 +66,13 @@ def _validation_details(exc: RequestValidationError) -> list[dict[str, Any]]:
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _handle_app_error(_request: Request, exc: AppError) -> JSONResponse:
-        headers = None
+        headers = dict(exc.headers or {})
         if isinstance(exc, RateLimitedError):
-            headers = {"Retry-After": str(exc.retry_after)}
+            headers["Retry-After"] = str(exc.retry_after)
         return JSONResponse(
             status_code=_status_for(exc),
             content=error_body(exc.code, exc.message, exc.details),
-            headers=headers,
+            headers=headers or None,
         )
 
     @app.exception_handler(RequestValidationError)

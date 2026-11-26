@@ -28,7 +28,7 @@ def test_full_client_and_admin_flow(
         },
     )
     assert registered.status_code == 200, registered.text
-    credentials: dict[str, Any] = registered.json()
+    credentials: dict[str, Any] = registered.json()["data"]
     client_id = credentials["client_id"]
     secret = credentials["secret"]
 

@@ -203,7 +203,7 @@ def test_admin_policies_apply_to_client_config(
         "/api/v1/config", headers=auth(registered["client_id"], registered["secret"])
     )
     assert config.status_code == 200
-    policy = config.json()
+    policy = config.json()["data"]
     assert policy["heartbeat_interval"] == 45
     assert policy["action"] == {
         "max_level": "L1",
