@@ -29,16 +29,11 @@ export type IncidentState =
   | 'FLAPPING'
   | 'CLOSED'
 
-/** 心跳中的模块快照（3.3 / 5.4） */
-export interface HeartbeatModule {
-  id: string
-  name?: string | null
-  layer?: string | null
-  status: StatusLevel
+/** 心跳中的检测项快照（5.6） */
+export interface HeartbeatCheck {
+  status: StatusLevel | string
   latency_ms?: number | null
-  uptime?: number | null
-  message?: string | null
-  evidence?: string | null
+  evidence?: Record<string, unknown> | null
 }
 
 /** 服务端客户端列表项（clients 表） */
@@ -124,7 +119,17 @@ export interface HeartbeatPoint {
   ts: string
   seq?: number | null
   latency_ms?: number | null
-  modules?: Record<string, { status: StatusLevel; latency_ms?: number | null }>
+  checks?: Record<string, HeartbeatCheck>
+}
+
+/** 检测项最近结果（客户端详情） */
+export interface CheckStatusItem {
+  check_id: string
+  name?: string | null
+  probe?: string | null
+  status?: StatusLevel | string | null
+  latency_ms?: number | null
+  evidence?: Record<string, unknown> | null
 }
 
 /** 总览页数据（GET /api/v1/admin/overview） */
@@ -153,7 +158,7 @@ export interface Overview {
 /** 客户端详情（GET /api/v1/admin/clients/{id}） */
 export interface ClientDetail {
   client: Client
-  modules: HeartbeatModule[]
+  checks: CheckStatusItem[]
   guards?: GuardSnapshot[]
   heartbeats: HeartbeatPoint[]
   incidents: Incident[]
@@ -276,7 +281,6 @@ export interface ClientStatusSnapshot {
   server_connected?: boolean | null
   last_heartbeat_at?: string | null
   last_beacon_at?: string | null
-  modules?: HeartbeatModule[]
   guards?: GuardSnapshot[]
   guards_source?: 'local' | 'server' | string | null
   guards_editable?: boolean | null
@@ -311,14 +315,31 @@ export interface GuardSnapshot {
   checks?: Record<string, GuardCheckResult> | null
 }
 
-/** 单个 Check 的配置（Guard 定义） */
-export interface GuardCheckConfig {
-  id?: string | null
+/** 检测项配置（服务端下发 / 客户端本地） */
+export interface CheckDefinition {
+  id: string
+  name: string
   probe: string
-  params?: Record<string, unknown> | null
+  params?: Record<string, unknown>
+  expect?: Record<string, unknown>
   timeout?: number | null
-  depends_on?: string[] | null
-  role?: string | null
+  depends_on?: string[]
+  enabled?: boolean
+}
+
+/** GuardEditor 可选的检测项（只依赖标识与依赖关系） */
+export interface CheckOption {
+  id: string
+  name?: string | null
+  probe?: string | null
+  enabled?: boolean
+  depends_on?: string[]
+}
+
+/** GET/PUT /api/v1/admin/clients/{id}/checks */
+export interface ClientChecksResponse {
+  items: CheckDefinition[]
+  managed: boolean
 }
 
 /** 触发策略 */
@@ -348,7 +369,7 @@ export interface GuardDefinition {
   name: string
   template?: string | null
   enabled?: boolean
-  checks: GuardCheckConfig[]
+  check_refs: string[]
   policy?: GuardPolicy
   recovery?: GuardRecoveryStep[]
   limits?: Record<string, unknown>
@@ -441,12 +462,13 @@ export interface ActionExecuteResponse {
 
 /** 探测器参数描述（manifest.params_schema） */
 export interface ProbeParamSpec {
-  type?: 'string' | 'number' | 'integer' | 'boolean' | 'enum' | string
+  type?: 'string' | 'number' | 'integer' | 'boolean' | 'enum' | 'array' | 'object' | string
   required?: boolean
   default?: unknown
   label?: string
   placeholder?: string
   values?: Array<string | number>
+  items?: string
 }
 
 /** 探测器目录项（内置 / 本地） */
@@ -467,10 +489,11 @@ export interface ProbeCatalogItem {
   sha256?: string | null
 }
 
-/** GET /api/probes */
+/** GET /api/probes（服务端为最近心跳上报的只读目录） */
 export interface ProbeCatalogResponse {
   items: ProbeCatalogItem[]
   directory?: string
+  updated_at?: string | null
 }
 
 /** POST /api/probes/{id}/test */

@@ -6,13 +6,12 @@ import {
   getChartTheme,
   toDate,
   useTheme,
-  type HeartbeatModule,
   type HeartbeatPoint,
 } from '@vigil/shared'
 
 const props = defineProps<{
   points: HeartbeatPoint[]
-  modules: HeartbeatModule[]
+  checks: Array<{ id: string; name?: string | null }>
 }>()
 
 const container = ref<HTMLDivElement | null>(null)
@@ -36,10 +35,10 @@ function buildOption(): echarts.EChartsOption {
     return Math.round((current.getTime() - prev.getTime()) / 1000)
   })
 
-  const latencySeries = props.modules.slice(0, 4).map((module, index) => {
+  const latencySeries = props.checks.slice(0, 4).map((check, index) => {
     const color = theme.series[(index + 1) % theme.series.length]
     return {
-      name: module.name || module.id,
+      name: check.name || check.id,
       type: 'line' as const,
       yAxisIndex: 1,
       smooth: true,
@@ -47,7 +46,7 @@ function buildOption(): echarts.EChartsOption {
       connectNulls: true,
       lineStyle: { width: 1.5, color },
       itemStyle: { color },
-      data: sorted.map((point) => point.modules?.[module.id]?.latency_ms ?? null),
+      data: sorted.map((point) => point.checks?.[check.id]?.latency_ms ?? null),
     }
   })
 
@@ -126,7 +125,7 @@ onMounted(() => {
 })
 
 watch(
-  () => [props.points, props.modules],
+  () => [props.points, props.checks],
   () => render(),
   { deep: true },
 )

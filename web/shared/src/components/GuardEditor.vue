@@ -1,18 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type {
-  GuardCheckConfig,
-  GuardDefinition,
-  GuardPolicy,
-  GuardRecoveryStep,
-} from '../types'
+import type { CheckOption, GuardDefinition, GuardPolicy, GuardRecoveryStep } from '../types'
 
-interface CheckDraft extends GuardCheckConfig {
-  paramsText: string
-}
-
-interface GuardDraft extends Omit<GuardDefinition, 'checks' | 'policy' | 'recovery'> {
-  checks: CheckDraft[]
+interface GuardDraft extends Omit<GuardDefinition, 'check_refs' | 'policy' | 'recovery'> {
+  check_refs: string[]
   policy: Required<GuardPolicy>
   recovery: GuardRecoveryStep[]
 }
@@ -21,13 +12,21 @@ const props = withDefaults(
   defineProps<{
     modelValue: boolean
     guards: GuardDefinition[]
+    checks?: CheckOption[]
     readonly?: boolean
     busy?: boolean
     title?: string
     hint?: string
     selectedId?: string
   }>(),
-  { readonly: false, busy: false, title: '编辑守护项', hint: '', selectedId: '' },
+  {
+    checks: () => [],
+    readonly: false,
+    busy: false,
+    title: '编辑守护项',
+    hint: '',
+    selectedId: '',
+  },
 )
 
 const emit = defineEmits<{
@@ -35,7 +34,6 @@ const emit = defineEmits<{
   save: [guards: GuardDefinition[]]
 }>()
 
-const PROBES = ['carrier', 'pppoe', 'route', 'dns', 'http', 'process', 'port', 'script']
 const ACTIONS = ['ifup_wan', 'restart_service']
 const MODES = [
   { value: 'dependency_tree', label: '依赖树（默认）' },
@@ -62,6 +60,13 @@ const error = ref('')
 
 const current = computed<GuardDraft | null>(() => draft.value[selected.value] ?? null)
 
+const availableChecks = computed<CheckOption[]>(() =>
+  [...props.checks]
+    .filter((check) => check && check.id)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id))),
+)
+const checkMap = computed(() => new Map(availableChecks.value.map((item) => [item.id, item])))
+
 function genId(): string {
   const uuid = globalThis.crypto?.randomUUID?.()
   if (uuid) return uuid
@@ -83,16 +88,7 @@ function toDraft(guard: GuardDefinition): GuardDraft {
     evaluate: { ...(guard.evaluate ?? {}) },
     policy,
     recovery: (guard.recovery ?? []).map((step) => ({ ...step })),
-    checks: (guard.checks ?? []).map((check) => ({
-      ...check,
-      id: check.id ?? '',
-      probe: check.probe || 'carrier',
-      params: { ...(check.params ?? {}) },
-      paramsText: JSON.stringify(check.params ?? {}, null, 2),
-      depends_on: [...(check.depends_on ?? [])],
-      timeout: check.timeout ?? null,
-      role: check.role ?? '',
-    })),
+    check_refs: [...(guard.check_refs ?? [])],
   }
 }
 
@@ -117,13 +113,14 @@ function close(): void {
 }
 
 function addGuard(): void {
+  const first = availableChecks.value[0]
   draft.value.push(
     toDraft({
       id: genId(),
       name: '新守护项',
       template: '',
       enabled: true,
-      checks: [{ probe: 'http', params: { url: ['http://connect.rom.miui.com/generate_204'] } }],
+      check_refs: first ? [first.id] : [],
       policy: { ...DEFAULT_POLICY },
       recovery: [],
       limits: { max_risk_level: 'L1' },
@@ -139,21 +136,35 @@ function removeGuard(index: number): void {
   if (selected.value < 0) selected.value = 0
 }
 
-function addCheck(): void {
-  if (!current.value) return
-  current.value.checks.push({
-    id: '',
-    probe: 'http',
-    params: {},
-    paramsText: '{}',
-    depends_on: [],
-    timeout: null,
-    role: '',
-  })
+function hasRef(guard: GuardDraft, checkId: string): boolean {
+  return guard.check_refs.includes(checkId)
 }
 
-function removeCheck(index: number): void {
-  current.value?.checks.splice(index, 1)
+function toggleRef(guard: GuardDraft, checkId: string, checked: boolean): void {
+  if (checked) {
+    if (!guard.check_refs.includes(checkId)) guard.check_refs.push(checkId)
+  } else {
+    guard.check_refs = guard.check_refs.filter((item) => item !== checkId)
+  }
+}
+
+function missingRefs(guard: GuardDraft): string[] {
+  return guard.check_refs.filter((ref) => !checkMap.value.has(ref))
+}
+
+/** 选中的检测项及其递归依赖，按 id 排序。 */
+function dependencyClosure(guard: GuardDraft): string[] {
+  const seen = new Set<string>()
+  const walk = (ids: string[]): void => {
+    for (const id of ids) {
+      if (seen.has(id)) continue
+      seen.add(id)
+      const check = checkMap.value.get(id)
+      if (check?.depends_on?.length) walk(check.depends_on)
+    }
+  }
+  walk(guard.check_refs)
+  return [...seen].sort((a, b) => a.localeCompare(b))
 }
 
 function addRecovery(): void {
@@ -168,17 +179,6 @@ function addRecovery(): void {
 
 function removeRecovery(index: number): void {
   current.value?.recovery.splice(index, 1)
-}
-
-function dependsText(check: CheckDraft): string {
-  return (check.depends_on ?? []).join(',')
-}
-
-function setDepends(check: CheckDraft, raw: string): void {
-  check.depends_on = raw
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
 }
 
 function modeOf(guard: GuardDraft): string {
@@ -209,36 +209,12 @@ function buildPayload(): GuardDefinition[] {
   const items = draft.value.map((guard, index) => {
     const label = guard.name || `第 ${index + 1} 项`
     if (!guard.name.trim()) errors.push(`${label}：名称不能为空`)
-    if (!guard.checks.length) errors.push(`${label}：至少需要一个检测条件`)
-
-    const checks = guard.checks.map((check, checkIndex) => {
-      let params: Record<string, unknown> = {}
-      const text = (check.paramsText ?? '').trim()
-      if (text) {
-        try {
-          const parsed = JSON.parse(text)
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            params = parsed as Record<string, unknown>
-          } else {
-            errors.push(`${label}：第 ${checkIndex + 1} 个检测参数的 JSON 必须是对象`)
-          }
-        } catch {
-          errors.push(`${label}：第 ${checkIndex + 1} 个检测参数不是合法 JSON`)
-        }
-      }
-      const item: GuardCheckConfig = {
-        probe: check.probe,
-        params,
-      }
-      if (check.id?.trim()) item.id = check.id.trim()
-      if (check.depends_on?.length) item.depends_on = check.depends_on
-      const timeout = Number(check.timeout)
-      if (check.timeout !== null && check.timeout !== undefined && Number.isFinite(timeout) && timeout > 0) {
-        item.timeout = timeout
-      }
-      if (check.role?.trim()) item.role = check.role.trim()
-      return item
-    })
+    if (!guard.check_refs.length) errors.push(`${label}：至少需要引用一个检测项`)
+    if (new Set(guard.check_refs).size !== guard.check_refs.length) {
+      errors.push(`${label}：检测项引用存在重复`)
+    }
+    const missing = missingRefs(guard)
+    if (missing.length) errors.push(`${label}：检测项不存在 ${missing.join(', ')}`)
 
     const recovery = guard.recovery
       .filter((step) => step.action)
@@ -246,7 +222,11 @@ function buildPayload(): GuardDefinition[] {
         const item: GuardRecoveryStep = { action: step.action }
         if (step.target?.trim()) item.target = step.target.trim()
         const verifyAfter = Number(step.verify_after)
-        if (step.verify_after !== null && step.verify_after !== undefined && Number.isFinite(verifyAfter)) {
+        if (
+          step.verify_after !== null &&
+          step.verify_after !== undefined &&
+          Number.isFinite(verifyAfter)
+        ) {
           item.verify_after = verifyAfter
         }
         if (step.continue_on_failure) item.continue_on_failure = true
@@ -259,7 +239,10 @@ function buildPayload(): GuardDefinition[] {
       fail_threshold: toNumber(guard.policy.fail_threshold, DEFAULT_POLICY.fail_threshold),
       fail_mode: guard.policy.fail_mode === 'window' ? 'window' : 'consecutive',
       fail_window: toNumber(guard.policy.fail_window, DEFAULT_POLICY.fail_window),
-      success_threshold: toNumber(guard.policy.success_threshold, DEFAULT_POLICY.success_threshold),
+      success_threshold: toNumber(
+        guard.policy.success_threshold,
+        DEFAULT_POLICY.success_threshold,
+      ),
       cooldown: toNumber(guard.policy.cooldown, DEFAULT_POLICY.cooldown),
       max_actions_per_hour: toNumber(
         guard.policy.max_actions_per_hour,
@@ -274,7 +257,7 @@ function buildPayload(): GuardDefinition[] {
       name: guard.name.trim(),
       template: guard.template ?? '',
       enabled: guard.enabled !== false,
-      checks,
+      check_refs: [...guard.check_refs],
       policy,
       recovery,
       limits: { ...(guard.limits ?? {}) },
@@ -322,7 +305,8 @@ function submit(): void {
             >
               <span class="guard-nav__name">{{ guard.name || '未命名' }}</span>
               <span class="guard-nav__meta">
-                {{ guard.enabled === false ? '已停用' : '启用' }} · {{ guard.checks.length }} 项
+                {{ guard.enabled === false ? '已停用' : '启用' }} ·
+                {{ guard.check_refs.length }} 项
               </span>
             </button>
             <button v-if="!readonly" type="button" class="guard-nav__add" @click="addGuard">
@@ -371,10 +355,8 @@ function submit(): void {
 
             <div class="form-section">
               <div class="form-section__head">
-                <span class="form-section__title">检测条件</span>
-                <button v-if="!readonly" type="button" class="text-btn" @click="addCheck">
-                  + 添加检测
-                </button>
+                <span class="form-section__title">检测项引用</span>
+                <span class="muted">已选 {{ current.check_refs.length }} 项</span>
               </div>
               <div class="form-grid">
                 <label class="field">
@@ -403,70 +385,41 @@ function submit(): void {
                 </label>
               </div>
 
-              <div class="check-list">
-                <div v-for="(check, index) in current.checks" :key="index" class="check-card">
-                  <div class="check-card__head">
-                    <span class="mono">检测 {{ index + 1 }}</span>
-                    <button
-                      v-if="!readonly"
-                      type="button"
-                      class="text-danger"
-                      @click="removeCheck(index)"
-                    >
-                      移除
-                    </button>
-                  </div>
-                  <div class="form-grid form-grid--tight">
-                    <label class="field">
-                      <span>探测器</span>
-                      <select v-model="check.probe" class="g-input" :disabled="readonly">
-                        <option v-for="probe in PROBES" :key="probe" :value="probe">{{ probe }}</option>
-                      </select>
-                    </label>
-                    <label class="field">
-                      <span>Check ID</span>
-                      <input
-                        v-model="check.id"
-                        class="g-input mono"
-                        type="text"
-                        placeholder="默认同探测器名"
-                        :disabled="readonly"
-                      />
-                    </label>
-                    <label class="field">
-                      <span>超时（秒）</span>
-                      <input
-                        v-model.number="check.timeout"
-                        class="g-input"
-                        type="number"
-                        min="1"
-                        placeholder="继承全局"
-                        :disabled="readonly"
-                      />
-                    </label>
-                    <label class="field">
-                      <span>依赖（逗号分隔）</span>
-                      <input
-                        class="g-input"
-                        type="text"
-                        :value="dependsText(check)"
-                        :disabled="readonly"
-                        @input="setDepends(check, ($event.target as HTMLInputElement).value)"
-                      />
-                    </label>
-                    <label class="field field--wide">
-                      <span>参数 JSON</span>
-                      <textarea
-                        v-model="check.paramsText"
-                        class="g-input mono code-area"
-                        rows="3"
-                        :disabled="readonly"
-                      />
-                    </label>
-                  </div>
-                </div>
-                <p v-if="!current.checks.length" class="muted">尚未配置检测条件。</p>
+              <div v-if="availableChecks.length" class="check-picker">
+                <label
+                  v-for="check in availableChecks"
+                  :key="check.id"
+                  class="check-option"
+                  :class="{ 'check-option--disabled': check.enabled === false }"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="hasRef(current, check.id)"
+                    :disabled="readonly"
+                    @change="
+                      toggleRef(
+                        current,
+                        check.id,
+                        ($event.target as HTMLInputElement).checked,
+                      )
+                    "
+                  />
+                  <span class="check-option__id mono">{{ check.id }}</span>
+                  <span class="check-option__name">{{ check.name || check.id }}</span>
+                  <span v-if="check.probe" class="check-option__tag mono">{{ check.probe }}</span>
+                  <span v-if="check.enabled === false" class="muted">已停用</span>
+                </label>
               </div>
+              <p v-else class="muted">
+                暂无可用检测项，请先在「检测项」面板创建检测项后再配置守护项。
+              </p>
+
+              <p v-if="missingRefs(current).length" class="ref-warning">
+                缺失检测项：{{ missingRefs(current).join('、') }}，保存前请移除或补建。
+              </p>
+              <p v-if="dependencyClosure(current).length" class="closure">
+                依赖闭包：<span class="mono">{{ dependencyClosure(current).join(' → ') }}</span>
+              </p>
             </div>
 
             <div class="form-section">
@@ -788,35 +741,73 @@ function submit(): void {
   }
 }
 
-.code-area {
-  resize: vertical;
-  min-height: 64px;
-}
-
 .id-text {
   font-size: 11px;
   color: var(--vigil-color-text-muted);
   overflow-wrap: anywhere;
 }
 
-.check-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--vigil-space-2);
-  margin-top: var(--vigil-space-2);
-}
-
-.check-card {
+.check-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 6px;
+  margin-top: var(--vigil-space-3);
   padding: var(--vigil-space-2);
   border: 1px solid var(--vigil-color-border);
   border-radius: var(--vigil-radius-sm);
+  background: var(--vigil-color-bg-subtle);
 }
 
-.check-card__head {
+.check-option {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--vigil-space-2);
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: var(--vigil-radius-sm);
+  font-size: var(--vigil-font-xs);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--vigil-color-surface);
+  }
+
+  &--disabled {
+    opacity: 0.65;
+  }
+}
+
+.check-option__id {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.check-option__name {
+  flex: 1;
+  min-width: 0;
+  color: var(--vigil-color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.check-option__tag {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--vigil-color-border);
+  border-radius: var(--vigil-radius-sm);
+  font-size: 11px;
+  color: var(--vigil-color-text-muted);
+}
+
+.ref-warning {
+  margin: var(--vigil-space-2) 0 0;
+  font-size: var(--vigil-font-xs);
+  color: var(--vigil-color-critical);
+}
+
+.closure {
+  margin: var(--vigil-space-2) 0 0;
   font-size: 11px;
   color: var(--vigil-color-text-muted);
 }

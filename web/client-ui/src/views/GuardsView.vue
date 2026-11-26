@@ -12,6 +12,7 @@ import {
   formatRelative,
   getErrorMessage,
   usePolling,
+  type CheckOption,
   type GuardCheckResult,
   type GuardDefinition,
   type GuardSnapshot,
@@ -20,6 +21,7 @@ import { clientApi } from '@/api/client'
 
 const definitions = ref<GuardDefinition[]>([])
 const snapshots = ref<GuardSnapshot[]>([])
+const checkOptions = ref<CheckOption[]>([])
 const source = ref<string>('local')
 const editable = ref(true)
 const loading = ref(false)
@@ -92,11 +94,23 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [config, status] = await Promise.all([clientApi.guards(), clientApi.status()])
+    const [config, status, checks] = await Promise.all([
+      clientApi.guards(),
+      clientApi.status(),
+      clientApi.checks(),
+    ])
     definitions.value = Array.isArray(config.items) ? config.items : []
     source.value = config.source || 'local'
     editable.value = config.editable !== false
     snapshots.value = Array.isArray(status.guards) ? status.guards : []
+    const checkItems = Array.isArray(checks) ? checks : checks.items ?? []
+    checkOptions.value = checkItems.map((item) => ({
+      id: item.id,
+      name: item.name,
+      probe: item.probe,
+      enabled: item.enabled,
+      depends_on: item.depends_on,
+    }))
     now.value = Date.now()
   } catch (err) {
     error.value = getErrorMessage(err, '守护项加载失败')
@@ -259,6 +273,7 @@ const poll = usePolling(load, {
     <GuardEditor
       v-model="editorOpen"
       :guards="definitions"
+      :checks="checkOptions"
       :readonly="editorReadonly"
       :busy="saving"
       :selected-id="editorSelected"
