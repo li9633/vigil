@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-def iso_utc(value: datetime | None) -> str | None:
-    """naive UTC 时间序列化为带 Z 后缀的 ISO 字符串。"""
-    return None if value is None else value.isoformat() + "Z"
+from ..utils.time import iso_utc as iso_utc
 
 
 class RegisterRequest(BaseModel):

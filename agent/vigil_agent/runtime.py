@@ -11,7 +11,6 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 
 from .detect.base import (
     STATUS_CRITICAL,
@@ -26,6 +25,8 @@ from .logstore import (
     MemoryLogHandler,
     log_event,
 )
+from .utils.fs import ensure_dir
+from .utils.time import to_iso
 
 LOGGER = logging.getLogger("vigil.agent")
 
@@ -123,10 +124,7 @@ def read_fw_version(path="/etc/openwrt_release"):
 
 def iso_utc(epoch):
     """epoch 秒 → ISO8601 UTC 字符串，供前端时间组件直接解析。"""
-    if epoch is None:
-        return None
-    moment = datetime.fromtimestamp(float(epoch), tz=timezone.utc)
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return to_iso(epoch)
 
 
 def evidence_text(evidence):
@@ -172,11 +170,7 @@ def derive_client_state(checks):
 
 
 def _ensure_dir(path):
-    try:
-        os.makedirs(path, exist_ok=True)
-        return True
-    except OSError:
-        return False
+    return ensure_dir(path)
 
 
 def prepare_storage(config):
