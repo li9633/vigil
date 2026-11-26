@@ -5,20 +5,20 @@
 - 主循环每秒 tick，按 interval 触发检测 / 心跳 / 拉配置
 - 内部看门狗在主循环超过 2×检测间隔未 tick 时 os._exit(1)，交由 procd 重启
 - 单实例通过 flock 保证（见 `main.py`）
+
+业务规则与视图组装在 `services/`，HTTP 控制在 `api/`，本模块只做装配与调度。
 """
 
-import copy
-import json
 import logging
 import os
+import secrets
 import signal
 import socket
 import threading
 import time
 import uuid
-from urllib.parse import urlparse
 
-from . import PROTOCOL_VERSION, __version__
+from . import __version__
 from .action.executor import ActionExecutor
 from .api import create_server
 from .config import DEFAULT_CONFIG_PATH, save_config
@@ -26,66 +26,20 @@ from .detect.base import (
     STATUS_CRITICAL,
     STATUS_OK,
     STATUS_SKIPPED,
-    STATUS_UNKNOWN,
-    STATUS_WARN,
     CommandRunner,
     DetectContext,
     DetectionEngine,
 )
-from .detect.script import (
-    delete_script,
-    inspect_scripts,
-    save_script,
-)
-from .guards import (
-    BUILTIN_PROBE_INFO,
-    GuardStateMachine,
-    aggregate_status,
-    run_checks,
-    validate_guards,
-)
+from .guards import GuardStateMachine, aggregate_status, run_checks
 from .guards.recovery import RecoveryRunner
-from .logstore import (
-    export_log_events,
-    filter_events,
-    log_event,
-    read_log_events,
-    set_log_context,
-)
-from .runtime import (
-    RuntimeState,
-    Watchdog,
-    derive_client_state,
-    evidence_text,
-    iso_utc,
-    prepare_storage,
-    read_first_line,
-    read_fw_version,
-    read_uptime,
-)
+from .logstore import log_event, set_log_context
+from .runtime import RuntimeState, Watchdog, prepare_storage
 from .scheduler import IntervalScheduler
+from .services import guard_service, uplink, views
 from .spool import EventSpool
 from .transport import Transport
 
 LOGGER = logging.getLogger("vigil.agent")
-
-
-def _acked_seqs(batch, acked):
-    """把服务端 ack（event_id 字符串或 seq 整数）映射为本地 seq 列表。
-
-    服务端 /api/v1/events 返回 acked=event_id 列表；旧版本可能返回 seq。
-    无法识别的 ack 不确认，等待下轮重试。
-    """
-    if not isinstance(acked, list) or not acked:
-        return [item.get("seq") for item in batch]
-    by_id = {str(item.get("event_id")): item.get("seq") for item in batch}
-    seqs = []
-    for value in acked:
-        if isinstance(value, int) and not isinstance(value, bool):
-            seqs.append(value)
-        elif str(value) in by_id:
-            seqs.append(by_id[str(value)])
-    return seqs
 
 
 class AgentApp:
@@ -116,7 +70,7 @@ class AgentApp:
         self.scheduler = IntervalScheduler()
 
         # 调度节拍取「旧检测间隔」与「各 Guard 间隔」的最小值；每一项再按自身间隔节流。
-        self.scheduler.add("detect", self._detect_loop_interval(self.guards))
+        self.scheduler.add("detect", guard_service.detect_loop_interval(config, self.guards))
         self.scheduler.add("heartbeat", int(config["server"]["heartbeat_interval"]))
         self.scheduler.add("config", int(config["server"]["config_poll_interval"]))
 
@@ -148,7 +102,7 @@ class AgentApp:
             "info",
             "agent.start",
             "vigil-agent 启动",
-            version=__version__,
+            version=self.state.agent_version,
             detect_interval=int(self.config["detect"]["interval"]),
             heartbeat_interval=int(self.config["server"]["heartbeat_interval"]),
         )
@@ -212,195 +166,18 @@ class AgentApp:
         return socket.gethostname() or "OpenWrt"
 
     def ensure_registered(self):
-        if self.transport.is_registered:
-            return True
-        now = time.time()
-        if now < self._next_register_at:
-            return False
-        server = self.config.get("server") or {}
-        if not server.get("base_url") or not server.get("bootstrap_token"):
-            self._next_register_at = now + 300
-            return False
-
-        result = self.transport.register(
-            self.agent_name(),
-            model=read_first_line("/tmp/sysinfo/model"),
-            fw_version=read_fw_version(),
-        )
-        if result.get("ok"):
-            self._next_register_at = 0.0
-            self.scheduler.update_interval(
-                "heartbeat", int(self.config["server"]["heartbeat_interval"])
-            )
-            self._record_event(
-                "agent_registered",
-                "agent",
-                {"client_id": self.transport.client_id},
-            )
-            set_log_context(self.transport.client_id, self.transport.boot_id)
-            log_event(
-                "info",
-                "client.register",
-                "注册成功",
-                client_id=self.transport.client_id,
-            )
-            return True
-
-        self._next_register_at = now + 300
-        self._log_throttled(
-            "register",
-            "warn",
-            "client.register.fail",
-            "注册失败，5 分钟后重试",
-            interval=300,
-            error=str(result.get("error") or ""),
-        )
-        return False
+        return uplink.ensure_registered(self)
 
     def heartbeat_once(self):
-        self.ensure_registered()
-        if not self.transport.is_registered:
-            return
-        checks = self.state.snapshot_checks()
-        modules = self._modules_snapshot(checks)
-        stats = self.spool.stats()
-        seq = self.spool.next_seq(persist=False)
-        result = self.transport.heartbeat(
-            seq,
-            read_uptime(),
-            modules=modules,
-            guards=self._guards_payload(),
-            spool={"pending": stats["pending"], "dropped": stats["dropped"]},
-            wan_ip=self._wan_ip(checks),
-        )
-        if result.get("ok"):
-            self.state.last_heartbeat = time.time()
-            self.flush_spool()
-        else:
-            self._log_throttled(
-                "heartbeat",
-                "warn",
-                "heartbeat.fail",
-                "心跳失败",
-                interval=60,
-                error=str(result.get("error") or ""),
-            )
+        return uplink.heartbeat_once(self)
 
     def flush_spool(self):
-        for _ in range(3):
-            batch = self.spool.pending(50)
-            if not batch:
-                return
-            result = self.transport.events(batch)
-            if not result.get("ok"):
-                self._log_throttled(
-                    "events",
-                    "warn",
-                    "events.upload.fail",
-                    "事件补传失败",
-                    interval=60,
-                    error=str(result.get("error") or ""),
-                )
-                return
-            body = result.get("body") or {}
-            acked = body.get("acked") or body.get("acked_seqs")
-            self.spool.ack(_acked_seqs(batch, acked))
+        return uplink.flush_spool(self)
 
     def poll_config(self):
-        result = self.transport.fetch_config(self._etag)
-        if not result.get("ok"):
-            self._log_throttled(
-                "config",
-                "warn",
-                "config.fetch.fail",
-                "拉取服务端配置失败",
-                interval=60,
-                error=str(result.get("error") or ""),
-            )
-            return
-        if result.get("status") == 304:
-            return
-        if result.get("etag"):
-            self._etag = result["etag"]
-        body = result.get("body") or {}
-        self._server_config = body if isinstance(body, dict) else {}
-        self._apply_server_guards(self._server_config)
-        self._record_event(
-            "config_received",
-            "agent",
-            {"etag": self._etag or "", "keys": sorted(self._server_config.keys())[:20]},
-        )
-        log_event(
-            "info",
-            "config.received",
-            "已接收服务端配置",
-            keys=len(self._server_config),
-            etag=self._etag or "",
-        )
-
-    def _apply_server_guards(self, server_config):
-        """应用服务端下发的 guards（热更新）。
-
-        - 含 guards 列表且校验通过：切换到 server 来源，本地不可编辑
-        - 未含 guards 键：回退到本地配置
-        - 校验失败：只记日志并保持当前 guards 不变
-        """
-        raw = server_config.get("guards") if isinstance(server_config, dict) else None
-        if isinstance(raw, list):
-            errors = []
-            validate_guards({"guards": raw}, errors)
-            if errors:
-                log_event(
-                    "warn",
-                    "guard_config.invalid",
-                    "服务端下发的守护项非法，保持当前配置",
-                    errors=errors[:20],
-                )
-                return
-            guards = copy.deepcopy(raw)
-            source = "server"
-        else:
-            if self.guards_source == "local" and self._server_guards is None:
-                # 已经是本地配置，无需重复替换与重置节流
-                return
-            guards = copy.deepcopy(self.config.get("guards") or [])
-            source = "local"
-
-        # guards 替换与 detect_once 互斥，避免检测过程中被换掉
-        with self._detect_lock:
-            self.guards = copy.deepcopy(guards)
-            self.guards_source = source
-            self._server_guards = copy.deepcopy(raw) if source == "server" else None
-            self._guard_last_run.clear()
-            self.scheduler.update_interval(
-                "detect", self._detect_loop_interval(self.guards)
-            )
-        log_event(
-            "info",
-            "guard_config.apply",
-            "已应用守护项配置",
-            source=source,
-            count=len(self.guards),
-        )
+        return uplink.poll_config(self)
 
     # ---------- 检测与自愈 ----------
-
-    def _detect_loop_interval(self, guards):
-        """计算 detect 调度节拍：旧 detect.interval 与启用 Guard 间隔的最小值。"""
-        try:
-            intervals = [int(self.config["detect"]["interval"])]
-        except (KeyError, TypeError, ValueError):
-            intervals = [30]
-        for guard in guards or []:
-            if not guard.get("enabled", True):
-                continue
-            try:
-                value = int((guard.get("policy") or {}).get("interval") or 0)
-            except (TypeError, ValueError):
-                value = 0
-            if value > 0:
-                intervals.append(value)
-        return min(intervals)
 
     def detect_once(self, emit_events=True, allow_actions=True):
         with self._detect_lock:
@@ -449,69 +226,14 @@ class AgentApp:
             return results
 
     def _evaluate_guards(self, now=None, previous=None):
-        """执行到期的 Guard Check，并推进各自的状态机。
-
-        每个 Guard 按 policy.interval 节流；未到期时沿用上一轮快照，
-        既保证心跳中的状态连续，也避免重复探测。
-        """
-        now = float(now if now is not None else time.time())
-        previous = previous or {}
-        runner = CommandRunner()
-        snapshots = {}
-        for guard in self.guards:
-            guard_id = str(guard.get("id"))
-            name = guard.get("name") or guard_id
-            if not guard.get("enabled", True):
-                self._guard_last_run.pop(guard_id, None)
-                snapshots[guard_id] = {
-                    "id": guard_id,
-                    "name": name,
-                    "template": guard.get("template", ""),
-                    "status": "DISABLED",
-                    "check_status": STATUS_SKIPPED,
-                    "checks": {},
-                }
-                continue
-
-            interval = int((guard.get("policy") or {}).get("interval") or 30)
-            last_run = self._guard_last_run.get(guard_id)
-            cached = previous.get(guard_id)
-            if last_run is not None and cached is not None and now - last_run < interval:
-                snapshots[guard_id] = cached
-                continue
-
-            checks = run_checks(guard, self.config, runner=runner)
-            check_status = aggregate_status(checks, guard.get("evaluate"))
-            fsm_state = self.guard_fsm.process(guard, check_status, now=now)
-            if LOGGER.isEnabledFor(logging.DEBUG):
-                for check in checks.values():
-                    log_event(
-                        "debug",
-                        "guard.check",
-                        "Check 结果",
-                        guard={"id": guard_id, "name": name, "template": guard.get("template", "")},
-                        check={"id": check.get("id"), "probe": check.get("probe")},
-                        status=check.get("status"),
-                        latency_ms=check.get("latency_ms"),
-                        evidence=check.get("evidence"),
-                    )
-            snapshots[guard_id] = {
-                "id": guard_id,
-                "name": name,
-                "template": guard.get("template", ""),
-                "status": fsm_state["status"],
-                "check_status": check_status,
-                "failure_count": fsm_state["failure_count"],
-                "success_count": fsm_state["success_count"],
-                "recovery_rounds": fsm_state["recovery_rounds"],
-                "rearm_at": fsm_state["rearm_at"],
-                "last_recovery_id": str(
-                    self.guard_fsm.snapshot(guard_id).get("last_recovery_id", "")
-                ),
-                "checks": checks,
-            }
-            self._guard_last_run[guard_id] = now
-        return snapshots
+        return guard_service.evaluate_guards(
+            self.guards,
+            self.config,
+            self.guard_fsm,
+            self._guard_last_run,
+            now=now,
+            previous=previous,
+        )
 
     def _emit_guard_events(self, previous, current):
         for guard_id, snapshot in current.items():
@@ -771,179 +493,26 @@ class AgentApp:
             )
             return False
 
-    def _guards_payload(self):
-        """心跳中的 Guard 快照，按 guard_id 索引。"""
-        payload = {}
-        for guard_id, snapshot in self.state.snapshot_guards().items():
-            payload[guard_id] = {
-                "id": guard_id,
-                "name": snapshot.get("name", ""),
-                "template": snapshot.get("template", ""),
-                "status": snapshot.get("status", ""),
-                "check_status": snapshot.get("check_status", ""),
-                "failure_count": snapshot.get("failure_count", 0),
-                "checks": snapshot.get("checks", {}),
-                "last_recovery_id": snapshot.get("last_recovery_id", ""),
-            }
-        return payload
-
     # ---------- 本地 API ----------
 
     def api_status(self):
-        checks = self.state.snapshot_checks()
-        order = self.engine.registry.ordered()
-        wan = self._wan_info(checks)
-        action_stats = self.executor.stats()
-        now = time.time()
-        modules = []
-        for layer in order:
-            result = checks.get(layer)
-            if not result:
-                continue
-            module = {
-                "id": layer,
-                "name": layer,
-                "layer": layer,
-                "status": result.get("status"),
-                "latency_ms": result.get("latency_ms"),
-            }
-            uptime = (result.get("evidence") or {}).get("uptime")
-            if isinstance(uptime, int) and not isinstance(uptime, bool):
-                module["uptime"] = uptime
-            modules.append(module)
-
-        last_heartbeat = self.state.last_heartbeat
-        return {
-            # 兼容字段（原有本地 API 消费者）
-            "agent_version": __version__,
-            "registered": bool(self.transport.is_registered),
-            "uptime": read_uptime(),
-            "started_at": int(self.state.started_at),
-            "storage_persistent": self.storage_persistent,
-            "server": {
-                "base_url": self.config["server"].get("base_url", ""),
-                "last_heartbeat": last_heartbeat,
-                "config_etag": self._etag or "",
-            },
-            "wan": wan,
-            "checks": [checks[layer] for layer in order if layer in checks],
-            "spool": self.spool.stats(),
-            "actions": action_stats,
-            # 前端 ClientStatusSnapshot 契约字段
-            "state": derive_client_state(checks),
-            "boot_id": self.transport.boot_id,
-            "wan_ip": wan.get("ip") or None,
-            "lan_ip": None,
-            "carrier": "pppoe" if wan.get("pppoe_up") else (wan.get("device") or None),
-            "pppoe_uptime": wan.get("pppoe_uptime"),
-            "server_connected": bool(last_heartbeat),
-            "last_heartbeat_at": iso_utc(last_heartbeat),
-            "last_beacon_at": None,
-            "modules": modules,
-            "guards": list(self.state.snapshot_guards().values()),
-            "guards_source": self.guards_source,
-            "guards_editable": self.guards_source == "local",
-            "latest_checks": self._check_items(checks),
-            "maintenance": bool(float(action_stats.get("maintenance_until") or 0) > now),
-            "generated_at": iso_utc(now),
-        }
-
-    def _check_items(self, checks=None):
-        """把检测结果整理成前端 CheckItem 列表。"""
-        checks = checks if checks is not None else self.state.snapshot_checks()
-        updated_at = iso_utc(self.state.last_check_at)
-        items = []
-        for layer in self.engine.registry.ordered():
-            result = checks.get(layer)
-            if not result:
-                continue
-            items.append(
-                {
-                    "id": layer,
-                    "name": layer,
-                    "layer": layer,
-                    "status": result.get("status"),
-                    "latency_ms": result.get("latency_ms"),
-                    "interval": int(self.config["detect"]["interval"]),
-                    "enabled": True,
-                    "evidence": evidence_text(result.get("evidence")),
-                    "updated_at": updated_at,
-                }
-            )
-        return items
+        return views.build_status(self)
 
     def api_checks(self):
-        return self._check_items()
+        return views.build_checks(self)
 
     def api_guards(self):
-        """GET /api/guards：返回当前生效的 Guard 配置及来源。"""
-        return {
-            "items": copy.deepcopy(self.guards),
-            "source": self.guards_source,
-            "editable": self.guards_source == "local",
-        }
+        return guard_service.build_guards(self)
 
     def api_guards_update(self, guards):
-        """PUT /api/guards：本地整表替换 Guard 配置并立即生效。"""
-        if self.guards_source == "server":
-            raise ValueError("managed_by_server")
-        if not isinstance(guards, list):
-            raise ValueError("guards 必须是数组")
-
-        candidate = copy.deepcopy(guards)
-        errors = []
-        validate_guards({"guards": candidate}, errors)
-        if errors:
-            raise ValueError("；".join(errors))
-
-        with self._detect_lock:
-            self.config["guards"] = copy.deepcopy(candidate)
-            self.guards = copy.deepcopy(candidate)
-            self.guards_source = "local"
-            self._server_guards = None
-            self._guard_last_run.clear()
-            self.scheduler.update_interval(
-                "detect", self._detect_loop_interval(self.guards)
-            )
-
-        save_config(self.config, self.config_path)
-        self._record_event(
-            "config_updated",
-            "guards",
-            {
-                "source": "local",
-                "count": len(candidate),
-                "guards": [guard.get("id") for guard in candidate],
-            },
-        )
-        log_event(
-            "info",
-            "guard_config.update",
-            "本地守护项配置已更新并持久化",
-            count=len(candidate),
-            source="local",
-        )
+        guard_service.update_local_guards(self, guards)
         return self.api_guards()
 
     def api_modules(self):
-        """GET /api/modules：内置探测器与本地脚本清单。"""
-        return {
-            "builtin": [dict(item) for item in BUILTIN_PROBE_INFO],
-            "scripts": inspect_scripts(),
-        }
+        return views.build_modules()
 
     def api_script_import(self, payload):
-        """POST /api/modules/script：导入或覆盖脚本探测器。"""
-        if not isinstance(payload, dict):
-            raise ValueError("请求体必须是对象")
-        content = payload.get("content")
-        if not isinstance(content, str):
-            raise ValueError("content 必须是字符串")
-        entry = save_script(
-            payload.get("name"),
-            content,
-            timeout=payload.get("timeout", 10),
-        )
+        entry = views.import_script(payload)
         self._record_event(
             "probe_imported",
             "probes",
@@ -959,123 +528,33 @@ class AgentApp:
         return {"ok": True, "script": entry, "modules": self.api_modules()}
 
     def api_script_delete(self, name):
-        """POST /api/modules/script/delete：删除脚本探测器。"""
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("name 不能为空")
-        delete_script(name.strip())
-        self._record_event("probe_deleted", "probes", {"name": name.strip()})
-        log_event("info", "probe.delete", "脚本探测器已删除", probe={"name": name.strip()})
+        cleaned = views.remove_script(name)
+        self._record_event("probe_deleted", "probes", {"name": cleaned})
+        log_event("info", "probe.delete", "脚本探测器已删除", probe={"name": cleaned})
         return {"ok": True, "modules": self.api_modules()}
 
     def api_settings(self):
-        """GET /api/settings：客户端运行设置与版本信息。"""
-        server = self.config.get("server") or {}
-        stats = self.executor.stats()
-        now = time.time()
-        until = float(stats.get("maintenance_until") or 0)
-        return {
-            "version": __version__,
-            "protocol_version": PROTOCOL_VERSION,
-            "config_path": self.config_path,
-            "server": {
-                "base_url": self.transport.base_url,
-                "client_id": self.transport.client_id,
-                "registered": self.transport.is_registered,
-                "heartbeat_interval": int(server.get("heartbeat_interval") or 0),
-                "config_poll_interval": int(server.get("config_poll_interval") or 0),
-                "verify_tls": bool(server.get("verify_tls", True)),
-            },
-            "action_safety": {
-                "global_enabled": self.executor.enabled,
-                "max_risk_level": self.executor.max_level,
-                "max_actions_per_hour": self.executor.max_per_hour,
-                "allowed_services": list(self.executor.allowed_services),
-            },
-            "maintenance": {
-                "active": until > now,
-                "until": int(until),
-                "remaining_seconds": max(0, int(until - now)),
-            },
-            "guards_source": self.guards_source,
-            "generated_at": int(now),
-        }
+        return views.build_settings(self)
 
     def api_settings_update(self, payload):
-        """PUT /api/settings：更新服务端地址、心跳间隔、安全上限与维护窗口。"""
-        if not isinstance(payload, dict):
-            raise ValueError("请求体必须是对象")
-
-        base_url = None
-        server_payload = payload.get("server")
-        if isinstance(server_payload, dict) and "base_url" in server_payload:
-            text = str(server_payload.get("base_url") or "").strip().rstrip("/")
-            parsed = urlparse(text)
-            if (
-                parsed.scheme not in ("http", "https")
-                or not parsed.netloc
-                or any(char.isspace() for char in text)
-            ):
-                raise ValueError("服务器地址必须是 http(s) URL")
-            base_url = text
-
-        heartbeat = None
-        if "heartbeat_interval" in payload:
-            try:
-                heartbeat = int(payload["heartbeat_interval"])
-            except (TypeError, ValueError):
-                raise ValueError("心跳间隔必须是整数") from None
-            if not 10 <= heartbeat <= 300:
-                raise ValueError("心跳间隔必须在 10-300 秒之间")
-
-        safety_updates = {}
-        safety_payload = payload.get("action_safety")
-        if safety_payload is not None:
-            if not isinstance(safety_payload, dict):
-                raise ValueError("action_safety 必须是对象")
-            if "global_enabled" in safety_payload:
-                if not isinstance(safety_payload["global_enabled"], bool):
-                    raise ValueError("global_enabled 必须是布尔值")
-                safety_updates["global_enabled"] = safety_payload["global_enabled"]
-            if "max_risk_level" in safety_payload:
-                level = str(safety_payload["max_risk_level"]).upper()
-                if level != "L1":
-                    raise ValueError("当前仅支持 L1 动作")
-                safety_updates["max_risk_level"] = level
-            if "max_actions_per_hour" in safety_payload:
-                try:
-                    limit = int(safety_payload["max_actions_per_hour"])
-                except (TypeError, ValueError):
-                    raise ValueError("每小时动作上限必须是整数") from None
-                if not 1 <= limit <= 60:
-                    raise ValueError("每小时动作上限必须在 1-60 之间")
-                safety_updates["max_actions_per_hour"] = limit
-
-        maintenance = None
-        if "maintenance_minutes" in payload:
-            try:
-                maintenance = int(payload["maintenance_minutes"])
-            except (TypeError, ValueError):
-                raise ValueError("维护窗口必须是整数分钟") from None
-            if not 0 <= maintenance <= 1440:
-                raise ValueError("维护窗口必须在 0-1440 分钟之间")
-
+        parsed = views.parse_settings_update(payload)
         changed = []
-        if base_url is not None:
-            self.transport.update_server(base_url)
+        if parsed["base_url"] is not None:
+            self.transport.update_server(parsed["base_url"])
             self._etag = None
             self._server_config = {}
             changed.append("server.base_url")
-        if heartbeat is not None:
-            self.config.setdefault("server", {})["heartbeat_interval"] = heartbeat
-            self.scheduler.update_interval("heartbeat", heartbeat)
+        if parsed["heartbeat"] is not None:
+            self.config.setdefault("server", {})["heartbeat_interval"] = parsed["heartbeat"]
+            self.scheduler.update_interval("heartbeat", parsed["heartbeat"])
             changed.append("server.heartbeat_interval")
-        if safety_updates:
+        if parsed["safety_updates"]:
             safety = self.config.setdefault("action_safety", {})
-            safety.update(safety_updates)
-            self.executor.apply_safety(safety_updates)
+            safety.update(parsed["safety_updates"])
+            self.executor.apply_safety(parsed["safety_updates"])
             changed.append("action_safety")
-        if maintenance is not None:
-            self.executor.set_maintenance(maintenance * 60)
+        if parsed["maintenance_minutes"] is not None:
+            self.executor.set_maintenance(parsed["maintenance_minutes"] * 60)
             changed.append("maintenance")
 
         if changed:
@@ -1085,43 +564,7 @@ class AgentApp:
         return self.api_settings()
 
     def api_events(self, limit=50):
-        items = self.state.events_snapshot(limit)
-        try:
-            pending = {
-                entry.get("seq") for entry in self.spool.pending(limit=100000)
-            }
-        except Exception:  # spool 读取失败时不影响事件展示
-            pending = set()
-        return [self._serialize_event_item(item, pending) for item in items]
-
-    @staticmethod
-    def _serialize_event_item(item, pending):
-        """把 spool 中的原始记录整理成前端 ClientEvent 契约结构。"""
-        payload = item.get("payload") or {}
-        if not isinstance(payload, dict):
-            payload = {"value": payload}
-        level = payload.get("status") or payload.get("level")
-        if level not in (STATUS_OK, STATUS_WARN, STATUS_CRITICAL, STATUS_UNKNOWN):
-            result = str(payload.get("result") or "").lower()
-            if payload.get("allowed") is False:
-                level = STATUS_WARN
-            elif result in ("success", "ok", "applied"):
-                level = STATUS_OK
-            elif result in ("failed", "error", "timeout"):
-                level = STATUS_CRITICAL
-            else:
-                level = STATUS_UNKNOWN
-        seq = item.get("seq")
-        return {
-            "event_id": item.get("event_id") or "",
-            "ts": iso_utc(item.get("ts")),
-            "type": item.get("type"),
-            "module": item.get("domain") or None,
-            "level": level,
-            "message": payload.get("message") or payload.get("reason") or None,
-            "uploaded": seq not in pending,
-            "payload": payload,
-        }
+        return views.list_events(self.state, self.spool, limit)
 
     def api_logs(
         self,
@@ -1132,31 +575,15 @@ class AgentApp:
         recovery_id=None,
         since=None,
     ):
-        limit = max(1, min(1000, int(limit)))
-        storage = self.config.get("storage") or {}
-        path = str(storage.get("log_path") or "")
-        backups = int(storage.get("log_backups") or 2)
-        if path and os.path.exists(path):
-            events = read_log_events(
-                path,
-                limit=limit,
-                level=level,
-                event=event,
-                guard_id=guard_id,
-                recovery_id=recovery_id,
-                since=since,
-                backup_count=backups,
-            )
-            if events:
-                return events
-        return filter_events(
-            self.state.logs_snapshot(500),
+        return views.query_logs(
+            self.config,
+            self.state,
+            limit=limit,
             level=level,
             event=event,
             guard_id=guard_id,
             recovery_id=recovery_id,
             since=since,
-            limit=limit,
         )
 
     def api_logs_export(
@@ -1167,32 +594,15 @@ class AgentApp:
         recovery_id=None,
         since=None,
     ):
-        storage = self.config.get("storage") or {}
-        path = str(storage.get("log_path") or "")
-        backups = int(storage.get("log_backups") or 2)
-        data = b""
-        if path and os.path.exists(path):
-            data = export_log_events(
-                path,
-                level=level,
-                event=event,
-                guard_id=guard_id,
-                recovery_id=recovery_id,
-                since=since,
-                backup_count=backups,
-            )
-        if data:
-            return data
-        items = filter_events(
-            self.state.logs_snapshot(500),
+        return views.export_logs(
+            self.config,
+            self.state,
             level=level,
             event=event,
             guard_id=guard_id,
             recovery_id=recovery_id,
             since=since,
         )
-        lines = [json.dumps(item, ensure_ascii=False, separators=(",", ":")) for item in items]
-        return ("\n".join(lines) + "\n").encode("utf-8") if lines else b""
 
     def api_action(self, name, target=None):
         result = self.executor.execute(name, target)
@@ -1220,39 +630,6 @@ class AgentApp:
         return result
 
     # ---------- 内部工具 ----------
-
-    def _modules_snapshot(self, checks):
-        modules = {}
-        for layer in self.engine.registry.ordered():
-            result = checks.get(layer)
-            if not result:
-                continue
-            item = {
-                "status": result.get("status"),
-                "latency_ms": int(result.get("latency_ms") or 0),
-            }
-            if layer == "net.pppoe":
-                uptime = (result.get("evidence") or {}).get("uptime")
-                if isinstance(uptime, int):
-                    item["uptime"] = uptime
-            modules[layer] = item
-        return modules
-
-    def _wan_ip(self, checks):
-        evidence = (checks.get("net.route") or {}).get("evidence") or {}
-        return evidence.get("egress_ip") or ""
-
-    def _wan_info(self, checks):
-        carrier = (checks.get("net.carrier") or {}).get("evidence") or {}
-        pppoe = (checks.get("net.pppoe") or {}).get("evidence") or {}
-        return {
-            "device": carrier.get("device") or "",
-            "interface": str(self.config["detect"].get("wan_interface") or "wan"),
-            "ip": self._wan_ip(checks),
-            "carrier": carrier.get("carrier", ""),
-            "pppoe_up": bool(pppoe.get("up")),
-            "pppoe_uptime": int(pppoe.get("uptime") or 0),
-        }
 
     def _record_event(self, event_type, domain, payload):
         event = {"type": event_type, "domain": domain, "payload": payload}
@@ -1375,6 +752,4 @@ class AgentApp:
 
 
 def _new_token():
-    import secrets
-
     return secrets.token_urlsafe(24)

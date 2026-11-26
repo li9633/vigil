@@ -3,7 +3,8 @@
 import tempfile
 import unittest
 
-from vigil_agent.app import AgentApp, _acked_seqs
+from vigil_agent.app import AgentApp
+from vigil_agent.services.uplink import acked_seqs
 from vigil_agent.spool import EventSpool
 
 
@@ -15,17 +16,17 @@ class AckedSeqsTest(unittest.TestCase):
         ]
 
     def test_event_ids_map_to_seq(self):
-        self.assertEqual(_acked_seqs(self.batch, ["e-2", "e-1"]), [12, 11])
+        self.assertEqual(acked_seqs(self.batch, ["e-2", "e-1"]), [12, 11])
 
     def test_integer_seqs_pass_through(self):
-        self.assertEqual(_acked_seqs(self.batch, [12]), [12])
+        self.assertEqual(acked_seqs(self.batch, [12]), [12])
 
     def test_unknown_ack_is_ignored(self):
-        self.assertEqual(_acked_seqs(self.batch, ["missing"]), [])
+        self.assertEqual(acked_seqs(self.batch, ["missing"]), [])
 
     def test_missing_ack_confirms_whole_batch(self):
-        self.assertEqual(_acked_seqs(self.batch, None), [11, 12])
-        self.assertEqual(_acked_seqs(self.batch, []), [11, 12])
+        self.assertEqual(acked_seqs(self.batch, None), [11, 12])
+        self.assertEqual(acked_seqs(self.batch, []), [11, 12])
 
 
 class FlushSpoolTest(unittest.TestCase):

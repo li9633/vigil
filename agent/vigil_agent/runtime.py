@@ -1,7 +1,7 @@
 """agent 运行时基础设施：内存状态、系统信息、日志装配与看门狗。
 
 这一层不参与业务编排，只提供进程内共享的运行时能力，
-供 `AgentApp` 与 HTTP 控制层复用。
+供 `AgentApp` 与 `services/` 复用。
 """
 
 import collections
