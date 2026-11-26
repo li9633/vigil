@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import threading
 import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
-from app.db import get_session, utcnow
+from app.db import get_session, session_scope, utcnow
 from app.logstore import collect_log_events, export_log_events, log_event, log_paths
 from app.models import (
     AuditLog,
@@ -1107,4 +1110,111 @@ def server_logs_export(
         content=data,
         media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="%s"' % filename},
+    )
+
+
+# SSE 推送：API 与 worker 是两个进程，状态变更发生在 worker，
+# 因此这里按固定间隔轮询数据库版本元组，变化时才通知前端重新拉取 REST 数据。
+STREAM_INTERVAL_SECONDS = 3
+STREAM_PING_SECONDS = 25
+STREAM_RETRY_MS = 5000
+
+
+def _stream_snapshot() -> dict[str, list[Any]]:
+    """读取各业务表的最小版本信息（聚合值，不含具体记录）。"""
+    with session_scope() as db:
+        incidents = db.execute(
+            select(
+                func.count(Incident.id),
+                func.max(Incident.id),
+                func.max(Incident.recovered_at),
+                func.max(Incident.acked_at),
+                func.max(Incident.notified_at),
+            )
+        ).one()
+        clients = db.execute(select(func.count(Client.id), func.max(Client.created_at))).one()
+        guards = db.execute(
+            select(func.count(GuardConfig.guard_id), func.max(GuardConfig.updated_at))
+        ).one()
+        notifications = db.execute(
+            select(
+                func.count(Notification.id),
+                func.max(Notification.id),
+                func.max(Notification.sent_at),
+            )
+        ).one()
+    return {
+        "incidents": [
+            incidents[0],
+            incidents[1],
+            iso_utc(incidents[2]),
+            iso_utc(incidents[3]),
+            iso_utc(incidents[4]),
+        ],
+        "clients": [clients[0], iso_utc(clients[1])],
+        "guards": [guards[0], iso_utc(guards[1])],
+        "notifications": [notifications[0], notifications[1], iso_utc(notifications[2])],
+    }
+
+
+def _sse_frame(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def _admin_event_stream(request: Request, *, once: bool) -> AsyncIterator[str]:
+    yield f"retry: {STREAM_RETRY_MS}\n\n"
+
+    try:
+        previous = _stream_snapshot()
+    except Exception as exc:  # 首次读取失败不中断连接，下一轮再试
+        log_event("warn", "admin.stream.snapshot", "读取推送版本失败", error=str(exc))
+        previous = {}
+    yield _sse_frame(
+        "ready", {"version": previous, "server_time": int(time.time())}
+    )
+    if once:
+        return
+
+    last_ping = time.monotonic()
+    while True:
+        await asyncio.sleep(STREAM_INTERVAL_SECONDS)
+        if await request.is_disconnected():
+            return
+        try:
+            current = _stream_snapshot()
+        except Exception as exc:  # 数据库短暂锁定时保持连接，避免前端反复重连
+            log_event("warn", "admin.stream.snapshot", "读取推送版本失败", error=str(exc))
+            current = previous
+        if current != previous:
+            changed = sorted(key for key in current if current.get(key) != previous.get(key))
+            previous = current
+            yield _sse_frame(
+                "update",
+                {
+                    "changed": changed,
+                    "version": current,
+                    "server_time": int(time.time()),
+                },
+            )
+            last_ping = time.monotonic()
+        elif time.monotonic() - last_ping >= STREAM_PING_SECONDS:
+            last_ping = time.monotonic()
+            yield ": ping\n\n"
+
+
+@router.get("/stream")
+async def admin_stream(
+    request: Request,
+    once: bool = Query(default=False, description="仅输出首帧后关闭，用于调试与探活"),
+    _actor: str = Depends(require_admin),
+) -> StreamingResponse:
+    """管理端 SSE：数据版本变化时推送 update 事件，前端据此重新拉取 REST 数据。"""
+    return StreamingResponse(
+        _admin_event_stream(request, once=once),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )

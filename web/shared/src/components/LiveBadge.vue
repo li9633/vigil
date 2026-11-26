@@ -5,8 +5,10 @@ const props = withDefaults(
   defineProps<{
     at?: Date | string | null
     paused?: boolean
+    /** SSE 实时推送已连接时显示对应文案 */
+    streaming?: boolean
   }>(),
-  { at: null, paused: false },
+  { at: null, paused: false, streaming: false },
 )
 
 const now = ref(Date.now())
@@ -31,12 +33,16 @@ const seconds = computed(() => {
 
 const text = computed(() => {
   if (props.paused) return '自动更新已暂停'
-  if (seconds.value === null) return '等待首次数据'
-  if (seconds.value < 5) return '刚刚更新'
-  if (seconds.value < 60) return `${seconds.value} 秒前更新`
-  const minutes = Math.floor(seconds.value / 60)
-  if (minutes < 60) return `${minutes} 分钟前更新`
-  return `${Math.floor(minutes / 60)} 小时前更新`
+  if (seconds.value === null) return props.streaming ? '实时推送已连接' : '等待首次数据'
+  const fresh =
+    seconds.value < 5
+      ? '刚刚更新'
+      : seconds.value < 60
+        ? `${seconds.value} 秒前更新`
+        : Math.floor(seconds.value / 60) < 60
+          ? `${Math.floor(seconds.value / 60)} 分钟前更新`
+          : `${Math.floor(seconds.value / 3600)} 小时前更新`
+  return props.streaming ? `实时推送 · ${fresh}` : fresh
 })
 </script>
 

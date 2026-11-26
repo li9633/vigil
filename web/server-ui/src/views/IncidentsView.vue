@@ -13,6 +13,7 @@ import {
   type Incident,
 } from '@vigil/shared'
 import { adminApi } from '@/api/admin'
+import { useServerStream } from '@/composables/useServerStream'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -108,6 +109,8 @@ const poll = usePolling(load, {
   interval: 20000,
   isError: () => Boolean(error.value),
 })
+// SSE 只加速刷新，轮询保留作为降级通道
+const stream = useServerStream({ onUpdate: () => poll.refresh() })
 </script>
 
 <template>
@@ -117,7 +120,7 @@ const poll = usePolling(load, {
         <h2 class="page-title">告警中心</h2>
         <p class="page-sub">按客户端 / 类别 / 时间聚合，支持确认操作{{ activeFilterCount ? ` · 已启用 ${activeFilterCount} 个筛选` : '' }}</p>
       </div>
-      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" :streaming="stream.connected" />
     </div>
 
     <div class="panel">

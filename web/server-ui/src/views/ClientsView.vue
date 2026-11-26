@@ -13,6 +13,7 @@ import {
   type Client,
 } from '@vigil/shared'
 import { adminApi } from '@/api/admin'
+import { useServerStream } from '@/composables/useServerStream'
 
 const router = useRouter()
 
@@ -73,6 +74,8 @@ const poll = usePolling(load, {
   interval: 15000,
   isError: () => Boolean(error.value),
 })
+// SSE 只加速刷新，轮询保留作为降级通道
+const stream = useServerStream({ onUpdate: () => poll.refresh() })
 </script>
 
 <template>
@@ -82,7 +85,7 @@ const poll = usePolling(load, {
         <h2 class="page-title">客户端</h2>
         <p class="page-sub">共 {{ clients.length }} 台设备，当前筛选 {{ filtered.length }} 台</p>
       </div>
-      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" :streaming="stream.connected" />
     </div>
 
     <div class="panel">

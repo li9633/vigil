@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -240,3 +242,99 @@ def test_admin_audit_list_filter_and_export(
 def test_admin_client_detail_missing(client: TestClient) -> None:
     assert _login(client).status_code == 200
     assert client.get("/api/v1/admin/clients/cl_unknown").status_code == 404
+
+
+def test_admin_stream_requires_login(client: TestClient) -> None:
+    assert client.get("/api/v1/admin/stream").status_code == 401
+    assert client.get("/api/v1/admin/stream", params={"once": 1}).status_code == 401
+
+
+def test_admin_stream_once_returns_ready_frame(client: TestClient) -> None:
+    assert _login(client).status_code == 200
+    response = client.get("/api/v1/admin/stream", params={"once": 1})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    text = response.text
+    assert "retry: " in text
+    assert "event: ready" in text
+    ready = json.loads(text.split("data: ", 1)[1].split("\n\n", 1)[0])
+    assert set(ready["version"]) == {"incidents", "clients", "guards", "notifications"}
+
+
+def test_stream_snapshot_tracks_incident_changes(client: TestClient) -> None:
+    from app.api_admin import _stream_snapshot
+
+    before = _stream_snapshot()
+    with session_scope() as db:
+        incident = Incident(
+            client_id="demo-client",
+            category="agent_down",
+            state="DOWN",
+            started_at=utcnow(),
+            detected_at=utcnow(),
+            summary="测试推送",
+        )
+        db.add(incident)
+        db.flush()
+        incident_id = incident.id
+
+    after_insert = _stream_snapshot()
+    assert after_insert["incidents"][0] == before["incidents"][0] + 1
+    assert after_insert["incidents"][1] == incident_id
+
+    with session_scope() as db:
+        row = db.get(Incident, incident_id)
+        assert row is not None
+        row.acked_at = utcnow()
+
+    after_ack = _stream_snapshot()
+    assert after_ack["incidents"] != after_insert["incidents"]
+
+
+class _FakeRequest:
+    """只实现 is_disconnected，便于直接驱动 SSE 生成器。"""
+
+    def __init__(self, disconnect_after: int) -> None:
+        self.calls = 0
+        self.disconnect_after = disconnect_after
+
+    async def is_disconnected(self) -> bool:
+        self.calls += 1
+        return self.calls > self.disconnect_after
+
+
+def test_admin_event_stream_emits_update_and_stops(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import api_admin
+
+    monkeypatch.setattr(api_admin, "STREAM_INTERVAL_SECONDS", 0)
+
+    async def run() -> tuple[list[str], str]:
+        request = _FakeRequest(disconnect_after=1)
+        stream = api_admin._admin_event_stream(request, once=False)
+        first = await stream.__anext__()
+        ready = await stream.__anext__()
+
+        with session_scope() as db:
+            db.add(
+                Incident(
+                    client_id="demo-client",
+                    category="agent_down",
+                    state="DOWN",
+                    started_at=utcnow(),
+                    detected_at=utcnow(),
+                    summary="推送测试",
+                )
+            )
+
+        update = await stream.__anext__()
+        with pytest.raises(StopAsyncIteration):
+            await stream.__anext__()
+        return [first, ready, update], update
+
+    frames, update = asyncio.run(run())
+    assert frames[0].startswith("retry: ")
+    assert "event: ready" in frames[1]
+    assert "event: update" in update
+    assert '"changed": ["incidents"]' in update

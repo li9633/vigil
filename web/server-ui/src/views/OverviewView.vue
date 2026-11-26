@@ -14,6 +14,7 @@ import {
   type Overview,
 } from '@vigil/shared'
 import { adminApi } from '@/api/admin'
+import { useServerStream } from '@/composables/useServerStream'
 
 const overview = ref<Overview | null>(null)
 const loading = ref(false)
@@ -102,6 +103,8 @@ const poll = usePolling(load, {
   interval: 15000,
   isError: () => Boolean(error.value),
 })
+// SSE 只加速刷新，轮询保留作为降级通道
+const stream = useServerStream({ onUpdate: () => poll.refresh() })
 </script>
 
 <template>
@@ -116,7 +119,7 @@ const poll = usePolling(load, {
           </template>
         </p>
       </div>
-      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
+      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" :streaming="stream.connected" />
     </div>
 
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
