@@ -14,6 +14,7 @@ from app.notifications import (
     retry_failed,
     send_incident,
 )
+from app.retention import purge_expired
 from app.security import purge_expired_nonces
 from app.settings import Settings, get_settings
 from app.state_machine import STATE_DOWN, STATE_RECOVERED, scan_guards, scan_once
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 def run_forever(settings: Settings) -> None:
     """按配置间隔循环扫描，单次异常不中断进程。"""
+    last_purge = 0.0
     while True:
         try:
             with session_scope() as db:
@@ -36,6 +38,17 @@ def run_forever(settings: Settings) -> None:
                 )
                 touched.extend(scan_guards(db, now))
                 purged = purge_expired_nonces(db, now, settings.nonce_ttl_seconds)
+                if time.monotonic() - last_purge >= 3600:
+                    removed = purge_expired(db, now, settings.retention_days)
+                    last_purge = time.monotonic()
+                    if sum(removed.values()):
+                        log_event(
+                            "info",
+                            "retention.purge",
+                            "清理过期明细数据",
+                            retention_days=settings.retention_days,
+                            **removed,
+                        )
                 _dispatch_notifications(db, touched, now)
                 if touched:
                     logger.debug(

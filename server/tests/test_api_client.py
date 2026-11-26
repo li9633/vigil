@@ -174,6 +174,21 @@ def test_events_idempotent(
     assert count == 1
 
 
+def test_events_batch_size_limited(
+    client: TestClient, registered: dict[str, Any], auth: Callable[..., dict[str, str]]
+) -> None:
+    events = [
+        {"event_id": f"evt-{index}", "seq": index, "type": "module_result", "domain": "net.dns"}
+        for index in range(201)
+    ]
+    response = client.post(
+        "/api/v1/events",
+        headers=auth(registered["client_id"], registered["secret"]),
+        json={"client_id": registered["client_id"], "events": events},
+    )
+    assert response.status_code == 422
+
+
 def test_config_etag(
     client: TestClient, registered: dict[str, Any], auth: Callable[..., dict[str, str]]
 ) -> None:

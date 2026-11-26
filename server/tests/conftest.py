@@ -20,6 +20,15 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "test-pass"
 
 
+@pytest.fixture(autouse=True)
+def _reset_login_limiter():
+    """每个用例重置管理员登录限流，避免相互影响。"""
+    from app.api_admin import reset_login_limiter
+
+    reset_login_limiter()
+    yield
+
+
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
     db_path = (tmp_path / "vigil-test.db").as_posix()

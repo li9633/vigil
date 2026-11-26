@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -39,6 +40,62 @@ from app.security import constant_time_equals
 from app.settings import Settings, settings_from_app
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+
+# 管理员登录限流：窗口内失败次数达到上限后暂时拒绝，防止在线爆破
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW_SECONDS = 60
+_login_failures: dict[str, list[float]] = {}
+_login_lock = threading.Lock()
+
+
+def _login_client_key(request: Request) -> str:
+    """取真实来源 IP；服务位于 nginx 之后，优先使用代理写入的头部。"""
+    forwarded = request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for") or ""
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _prune_login_failures(now: float) -> None:
+    expired = [
+        key
+        for key, stamps in _login_failures.items()
+        if not stamps or now - stamps[-1] >= LOGIN_WINDOW_SECONDS
+    ]
+    for key in expired:
+        _login_failures.pop(key, None)
+
+
+def _login_blocked(key: str, now: float) -> tuple[bool, float]:
+    """返回 (是否限流, 最早一次失败时间)。"""
+    with _login_lock:
+        stamps = [
+            stamp for stamp in _login_failures.get(key, []) if now - stamp < LOGIN_WINDOW_SECONDS
+        ]
+        if stamps:
+            _login_failures[key] = stamps
+        else:
+            _login_failures.pop(key, None)
+        if len(_login_failures) > 512:
+            _prune_login_failures(now)
+        return len(stamps) >= LOGIN_MAX_FAILURES, stamps[0] if stamps else now
+
+
+def _record_login_failure(key: str, now: float) -> None:
+    with _login_lock:
+        _login_failures.setdefault(key, []).append(now)
+
+
+def _clear_login_failures(key: str) -> None:
+    with _login_lock:
+        _login_failures.pop(key, None)
+
+
+def reset_login_limiter() -> None:
+    """清空限流状态，供测试使用。"""
+    with _login_lock:
+        _login_failures.clear()
+
 
 
 def require_admin(request: Request) -> str:
@@ -224,21 +281,42 @@ def login(
     db: Session = Depends(get_session),
     settings: Settings = Depends(settings_from_app),
 ) -> dict[str, Any]:
+    now = time.time()
+    client_key = _login_client_key(request)
+    blocked, first_failure = _login_blocked(client_key, now)
+    if blocked:
+        retry_after = max(1, int(LOGIN_WINDOW_SECONDS - (now - first_failure)))
+        log_event(
+            "warn",
+            "auth.login.blocked",
+            "管理员登录被限流",
+            username=payload.username,
+            ip=client_key,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="登录尝试过于频繁，请稍后再试",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     valid = constant_time_equals(payload.username, settings.admin_username) and (
         constant_time_equals(payload.password, settings.admin_password)
     )
     if not valid:
+        _record_login_failure(client_key, now)
         log_event(
             "warn",
             "auth.login.fail",
             "管理员登录失败",
             username=payload.username,
+            ip=client_key,
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
         )
 
+    _clear_login_failures(client_key)
     request.session["admin"] = payload.username
     db.add(
         AuditLog(
@@ -246,9 +324,7 @@ def login(
             action="login",
             target="admin",
             ts=utcnow(),
-            detail=json.dumps(
-                {"ip": request.client.host if request.client else ""}, ensure_ascii=False
-            ),
+            detail=json.dumps({"ip": client_key}, ensure_ascii=False),
         )
     )
     db.commit()

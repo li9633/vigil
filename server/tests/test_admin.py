@@ -32,6 +32,31 @@ def test_admin_login_rejects_wrong_password(client: TestClient) -> None:
     assert "vigil_session" not in client.cookies
 
 
+def test_admin_login_rate_limited(client: TestClient) -> None:
+    from app.api_admin import LOGIN_MAX_FAILURES
+
+    for _ in range(LOGIN_MAX_FAILURES):
+        assert _login(client, password="wrong").status_code == 401
+
+    blocked = _login(client, password="wrong")
+    assert blocked.status_code == 429
+    assert blocked.headers["Retry-After"].isdigit()
+    # 限流期间即使密码正确也不放行
+    assert _login(client).status_code == 429
+
+
+def test_admin_login_success_resets_limiter(client: TestClient) -> None:
+    from app.api_admin import LOGIN_MAX_FAILURES
+
+    for _ in range(LOGIN_MAX_FAILURES - 1):
+        assert _login(client, password="wrong").status_code == 401
+    assert _login(client).status_code == 200
+
+    for _ in range(LOGIN_MAX_FAILURES - 1):
+        assert _login(client, password="wrong").status_code == 401
+    assert _login(client, password="wrong").status_code == 401
+
+
 def test_admin_login_overview_and_audit(
     client: TestClient, registered: dict[str, Any]
 ) -> None:

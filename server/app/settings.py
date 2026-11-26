@@ -67,6 +67,7 @@ class Settings:
     log_max_bytes: int = 10 * 1024 * 1024
     log_backups: int = 5
     log_compress: bool = True
+    retention_days: int = 30
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -93,6 +94,7 @@ class Settings:
             log_max_bytes=_env_int("VIGIL_LOG_MAX_BYTES", cls.log_max_bytes),
             log_backups=_env_int("VIGIL_LOG_BACKUPS", cls.log_backups),
             log_compress=_env_bool("VIGIL_LOG_COMPRESS", cls.log_compress),
+            retention_days=_env_int("VIGIL_RETENTION_DAYS", cls.retention_days),
         )
 
     @property

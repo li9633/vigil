@@ -74,7 +74,8 @@ class EventItem(BaseModel):
 
 class EventsRequest(BaseModel):
     client_id: str
-    events: list[EventItem] = Field(default_factory=list)
+    # 客户端按 50 条批量上报，这里限制上限避免异常请求占用内存
+    events: list[EventItem] = Field(default_factory=list, max_length=200)
 
 
 class EventsResponse(BaseModel):
