@@ -6,7 +6,6 @@ import { navIcons } from '@vigil/shared'
 interface NavItem {
   to: string
   label: string
-  milestone?: string
 }
 
 interface NavGroup {
@@ -26,7 +25,7 @@ const groups: NavGroup[] = [
   {
     title: '配置',
     items: [
-      { to: '/notifications', label: '通知配置', milestone: 'M2' },
+      { to: '/notifications', label: '通知配置' },
       { to: '/settings', label: '策略配置' },
       { to: '/audit', label: '审计日志' },
     ],
@@ -65,7 +64,6 @@ function isActive(to: string): boolean {
           aria-hidden="true"
         />
         <span class="nav-label">{{ item.label }}</span>
-        <span v-if="item.milestone" class="nav-badge">{{ item.milestone }}</span>
       </router-link>
     </template>
   </div>
@@ -141,16 +139,6 @@ function isActive(to: string): boolean {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.nav-badge {
-  padding: 0 5px;
-  border: 1px solid var(--vigil-color-border-strong);
-  border-radius: var(--vigil-radius-sm);
-  font-size: 10px;
-  line-height: 15px;
-  font-weight: 500;
-  color: var(--vigil-color-text-muted);
 }
 
 @media (max-width: 900px) {
