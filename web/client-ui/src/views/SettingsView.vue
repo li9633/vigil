@@ -149,7 +149,7 @@ onMounted(load)
           <div class="form-grid">
             <label class="field">
               <span class="field-label">服务端地址</span>
-              <el-input v-model="form.baseUrl" placeholder="http://203.0.113.10:5000" />
+              <el-input v-model="form.baseUrl" placeholder="http://vigil.example.com:5000" />
             </label>
             <label class="field">
               <span class="field-label">心跳间隔（秒）</span>
