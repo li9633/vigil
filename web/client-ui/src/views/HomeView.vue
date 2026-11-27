@@ -87,7 +87,7 @@ const poll = usePolling(load, {
     <EmptyState
       v-else-if="!status && !loading"
       title="暂未获取到状态"
-      description="请确认 agent 服务已启动后重试。"
+      description="请确认客户端服务已启动后重试。"
     >
       <template #action>
         <el-button size="small" @click="poll.retry">重新加载</el-button>

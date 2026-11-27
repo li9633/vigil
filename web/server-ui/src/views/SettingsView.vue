@@ -44,13 +44,13 @@ async function load() {
 
 function validate(): string {
   if (form.heartbeat_interval >= form.suspect_seconds) {
-    return 'SUSPECT 阈值必须大于心跳间隔'
+    return '疑似异常阈值必须大于心跳间隔'
   }
   if (form.suspect_seconds >= form.down_seconds) {
-    return 'DOWN 阈值必须大于 SUSPECT 阈值'
+    return '离线阈值必须大于疑似异常阈值'
   }
   if (form.beacon_seconds < form.heartbeat_interval) {
-    return 'beacon 阈值不能小于心跳间隔'
+    return '主机保活超时不能小于心跳间隔'
   }
   return ''
 }
@@ -66,7 +66,7 @@ async function save() {
   try {
     const data = await adminApi.savePolicies({ ...form })
     applyPolicies(data.policies)
-    ElMessage.success('策略已保存，worker 与客户端配置将即时生效')
+    ElMessage.success('策略已保存，客户端将在下一轮配置同步时自动应用')
   } catch (err) {
     error.value = getErrorMessage(err, '策略保存失败')
   } finally {
@@ -88,7 +88,7 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h2 class="page-title">策略配置</h2>
-        <p class="page-sub">保存后无需重启：worker 扫描与客户端下发策略会在下一轮读取新值</p>
+        <p class="page-sub">保存后无需重启，客户端会在下一轮配置同步时自动应用新策略</p>
       </div>
       <div class="head-actions">
         <el-button size="small" plain @click="restoreDefaults">恢复默认</el-button>
@@ -103,22 +103,22 @@ onMounted(load)
     <section class="panel">
       <div class="panel-body">
         <h3 class="section-title">心跳与离线判定</h3>
-        <p class="section-sub">客户端心跳间隔与 SUSPECT / DOWN 判定必须满足：心跳 &lt; SUSPECT &lt; DOWN。</p>
+        <p class="section-sub">心跳间隔、疑似异常阈值与离线阈值必须依次递增。</p>
         <div class="grid">
           <label class="field">
             <span class="field-label">心跳间隔（秒）</span>
             <el-input-number v-model="form.heartbeat_interval" :min="10" :max="300" size="small" />
           </label>
           <label class="field">
-            <span class="field-label">SUSPECT 阈值（秒）</span>
+            <span class="field-label">疑似异常阈值（秒）</span>
             <el-input-number v-model="form.suspect_seconds" :min="30" :max="3600" size="small" />
           </label>
           <label class="field">
-            <span class="field-label">DOWN 阈值（秒）</span>
+            <span class="field-label">离线阈值（秒）</span>
             <el-input-number v-model="form.down_seconds" :min="60" :max="7200" size="small" />
           </label>
           <label class="field">
-            <span class="field-label">beacon 阈值（秒）</span>
+            <span class="field-label">主机保活超时（秒）</span>
             <el-input-number v-model="form.beacon_seconds" :min="30" :max="3600" size="small" />
           </label>
         </div>
@@ -151,7 +151,7 @@ onMounted(load)
     <section class="panel">
       <div class="panel-body">
         <h3 class="section-title">动作与安全上限</h3>
-        <p class="section-sub">全局动作开关与客户端 L1 动作冷却/频次上限，随策略下发。</p>
+        <p class="section-sub">自动恢复动作的全局开关、冷却时间与每小时执行次数上限。</p>
         <div class="grid">
           <label class="field field--switch">
             <span class="field-label">启用动作</span>

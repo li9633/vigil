@@ -114,8 +114,8 @@ async function rotateSecret() {
   if (!clientId.value || rotating.value) return
   try {
     await ElMessageBox.confirm(
-      '轮换后旧 secret 立即失效，客户端会认证失败，直到在设备上更新为新 secret。新 secret 只显示一次，确定继续？',
-      '轮换客户端 secret',
+      '轮换后旧密钥立即失效，客户端会认证失败，直到在设备上更新为新密钥。新密钥只显示一次，确定继续？',
+      '轮换客户端密钥',
       { type: 'warning', confirmButtonText: '轮换', cancelButtonText: '取消' },
     )
   } catch {
@@ -126,7 +126,7 @@ async function rotateSecret() {
     const result = await adminApi.rotateClientSecret(clientId.value)
     rotatedSecret.value = result.secret
     secretDialogOpen.value = true
-    ElMessage.success('secret 已轮换')
+    ElMessage.success('客户端密钥已轮换')
   } catch (err) {
     ElMessage.error(getErrorMessage(err, '轮换失败'))
   } finally {
@@ -195,7 +195,7 @@ async function copyRotatedSecret() {
               <dd><TimeText :value="client.last_seen" /></dd>
             </div>
             <div class="meta-item">
-              <dt>最后 beacon</dt>
+              <dt>最后保活信号</dt>
               <dd><TimeText :value="client.last_beacon" /></dd>
             </div>
             <div class="meta-item">
@@ -218,12 +218,12 @@ async function copyRotatedSecret() {
         <div class="panel-head">
           <span class="panel-title">访问凭证</span>
           <el-button size="small" :loading="rotating" @click="rotateSecret">
-            轮换 secret
+            轮换密钥
           </el-button>
         </div>
         <div class="panel-body">
           <p class="muted secret-hint">
-            secret 仅以哈希形式保存，服务端无法查看明文。轮换后需同步修改设备配置，否则该客户端会认证失败。
+            客户端密钥只保存加密摘要，服务端无法查看明文。轮换后需同步修改设备配置，否则该客户端会认证失败。
           </p>
         </div>
       </div>
@@ -394,7 +394,7 @@ async function copyRotatedSecret() {
                 </span>
               </li>
             </ul>
-            <EmptyState v-else compact title="暂无事件" description="agent 尚未上报事件。" />
+            <EmptyState v-else compact title="暂无事件" description="客户端尚未上报事件。" />
           </div>
         </div>
       </div>
@@ -427,7 +427,7 @@ async function copyRotatedSecret() {
 
     <el-dialog
       v-model="secretDialogOpen"
-      title="新的客户端 secret"
+      title="新的客户端密钥"
       width="520px"
       :close-on-click-modal="false"
       @closed="rotatedSecret = ''"

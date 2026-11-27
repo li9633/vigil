@@ -57,9 +57,9 @@ async function submit() {
       <h1>Vigil</h1>
       <p class="tagline">自愈式互联网连接守护</p>
       <ul class="brand-points">
-        <li>心跳 / beacon 双通道判定</li>
+        <li>心跳与主机保活双通道判定</li>
         <li>分层检测与故障归因</li>
-        <li>L1 自动恢复 + 通知</li>
+        <li>低风险自动恢复与告警通知</li>
       </ul>
       <p class="brand-foot">v1 · 服务端管理台</p>
     </section>
@@ -102,8 +102,6 @@ async function submit() {
             {{ loading ? '登录中…' : '登录' }}
           </el-button>
         </el-form>
-
-        <p class="form-tip">会话由后端 HttpOnly Cookie 维持，前端不保存密码。</p>
       </div>
     </section>
   </div>
@@ -229,13 +227,6 @@ async function submit() {
 .submit-btn {
   width: 100%;
   margin-top: var(--vigil-space-2);
-}
-
-.form-tip {
-  margin: var(--vigil-space-4) 0 0;
-  font-size: var(--vigil-font-xxs);
-  color: var(--vigil-color-text-muted);
-  text-align: center;
 }
 
 @media (max-width: 900px) {

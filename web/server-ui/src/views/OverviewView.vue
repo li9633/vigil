@@ -134,7 +134,7 @@ const stream = useServerStream({ onUpdate: () => poll.refresh() })
     <EmptyState
       v-else-if="!overview && !loading"
       title="暂未获取到总览数据"
-      description="请确认服务端 API 可用后重试。"
+      description="请确认服务端运行正常后重试。"
     >
       <template #action>
         <el-button size="small" @click="poll.retry">重新加载</el-button>

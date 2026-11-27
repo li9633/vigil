@@ -103,7 +103,7 @@ async function upload(event: Event) {
 async function remove(probe: ProbeCatalogItem) {
   try {
     await ElMessageBox.confirm(
-      `删除本地探测器 ${probe.id}？引用它的检测项将变为 unknown。`,
+      `删除本地探测器 ${probe.id}？引用它的检测项将变为未知状态。`,
       '删除探测器',
       { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
     )
@@ -148,7 +148,7 @@ function parseExpect(): Record<string, unknown> | undefined {
   if (!text) return undefined
   const parsed = JSON.parse(text)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('expect 必须是 JSON 对象')
+    throw new Error('判定条件必须是 JSON 对象')
   }
   return parsed as Record<string, unknown>
 }
@@ -160,7 +160,7 @@ async function runTest() {
   try {
     expect = parseExpect()
   } catch (err) {
-    ElMessage.error(getErrorMessage(err, 'expect 必须是合法 JSON 对象'))
+    ElMessage.error(getErrorMessage(err, '判定条件必须是合法 JSON 对象'))
     return
   }
   testRunning.value = true
@@ -192,7 +192,7 @@ const poll = usePolling(load, {
       <div class="head-actions">
         <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
         <el-button size="small" type="primary" :loading="installing" @click="pickFile">
-          安装本地 probe
+          安装本地探测器
         </el-button>
       </div>
     </div>
@@ -210,8 +210,8 @@ const poll = usePolling(load, {
       type="warning"
       show-icon
       :closable="false"
-      title="本地 probe 以 root 权限执行"
-      description="仅安装可信来源的 tar.gz 包；安装、删除与试运行均写入本地审计日志。"
+      title="本地探测器以管理员权限执行"
+      description="仅安装可信来源的扩展包；安装、删除与试运行均写入本地审计日志。"
     />
 
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
@@ -226,10 +226,10 @@ const poll = usePolling(load, {
     <EmptyState
       v-else-if="!probes.length && !loading"
       title="暂无探测器"
-      description="内置探测器随 agent 提供，也可上传 tar.gz 安装本地 probe。"
+      description="内置探测器随客户端提供，也可上传安装本地探测器扩展。"
     >
       <template #action>
-        <el-button size="small" type="primary" @click="pickFile">安装本地 probe</el-button>
+        <el-button size="small" type="primary" @click="pickFile">安装本地探测器</el-button>
       </template>
     </EmptyState>
 
@@ -321,7 +321,7 @@ const poll = usePolling(load, {
           </label>
         </div>
         <label class="field field--wide">
-          <span>Expectation（JSON，留空使用默认）</span>
+          <span>判定条件（JSON，留空使用默认）</span>
           <textarea v-model="testExpect" class="code-area" rows="5" />
         </label>
         <div v-if="testResult" class="test-result">
@@ -329,9 +329,9 @@ const poll = usePolling(load, {
             <StatusTag :status="testResult.status" size="sm" />
             <span class="muted">{{ formatLatency(testResult.latency_ms) }}</span>
           </div>
-          <p class="result-label">Observation</p>
+          <p class="result-label">观测结果</p>
           <pre class="code-block">{{ pretty(testResult.observation) }}</pre>
-          <p class="result-label">Evidence</p>
+          <p class="result-label">判定证据</p>
           <pre class="code-block">{{ pretty(testResult.evidence) }}</pre>
         </div>
       </div>

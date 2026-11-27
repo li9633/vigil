@@ -155,7 +155,7 @@ onMounted(() => {
     <div class="page-head">
       <div>
         <h2 class="page-title">日志</h2>
-        <p class="page-sub">共 {{ logs.length }} 条 · 本机结构化日志，导出为 JSONL</p>
+        <p class="page-sub">共 {{ logs.length }} 条 · 本机运行日志，可导出查看</p>
       </div>
       <div class="head-actions">
         <el-button size="small" type="primary" plain @click="exportLogs">导出</el-button>

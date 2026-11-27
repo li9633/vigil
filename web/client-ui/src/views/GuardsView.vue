@@ -56,7 +56,7 @@ const abnormalCount = computed(
 )
 
 const sourceLabel = computed(() =>
-  source.value === 'server' ? '服务端下发' : '本地配置',
+  source.value === 'server' ? '服务端托管' : '本地配置',
 )
 
 function checksOf(snap: GuardSnapshot | null): GuardCheckResult[] {
@@ -84,7 +84,7 @@ function openEditor(selectedId = '', readonly = false): void {
   editorReadonly.value = readonly
   editorTitle.value = readonly ? '查看守护项配置' : '编辑守护项'
   editorHint.value = readonly
-    ? '当前配置由服务端下发，客户端只读；请到服务端客户端详情中修改。'
+    ? '当前配置由服务端统一管理，客户端只读；请到服务端管理台修改。'
     : '修改后立即生效并写入本地配置；检测与恢复动作按新策略执行。'
   editorOpen.value = true
 }
@@ -174,8 +174,8 @@ const poll = usePolling(load, {
       type="info"
       show-icon
       :closable="false"
-      title="守护项由服务端下发"
-      description="客户端本地为只读；服务端修改后将在下一次配置轮询时自动生效。"
+      title="守护项由服务端统一管理"
+      description="客户端本地为只读；服务端修改后会在下一次配置同步时自动生效。"
     />
 
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
@@ -247,7 +247,7 @@ const poll = usePolling(load, {
               <dd class="mono">{{ rearmText(row.snap) || '—' }}</dd>
             </div>
             <div class="meta-item wide">
-              <dt>Guard ID</dt>
+              <dt>守护项 ID</dt>
               <dd class="mono">{{ row.def.id }}</dd>
             </div>
           </dl>
@@ -265,7 +265,7 @@ const poll = usePolling(load, {
               </div>
             </li>
           </ul>
-          <p v-else class="muted empty-checks">该守护项暂无 Check 结果</p>
+          <p v-else class="muted empty-checks">该守护项暂无检测结果</p>
         </div>
       </div>
     </template>

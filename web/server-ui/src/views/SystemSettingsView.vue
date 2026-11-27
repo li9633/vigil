@@ -88,7 +88,7 @@ async function saveRetention() {
   try {
     const data = await adminApi.savePolicies({ ...retentionForm })
     fillRetention(data.policies)
-    ElMessage.success('已保存，worker 下一轮清理与磁盘检查即生效')
+    ElMessage.success('已保存，将在下一轮清理与磁盘检查时生效')
   } catch (err) {
     error.value = getErrorMessage(err, '保存失败')
   } finally {
@@ -104,7 +104,7 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h2 class="page-title">系统设置</h2>
-        <p class="page-sub">管理员凭证、数据保留与磁盘水位；保存后即时生效，无需重启服务</p>
+        <p class="page-sub">管理员账号、数据保留与磁盘告警；保存后即时生效，无需重启服务</p>
       </div>
     </div>
 
@@ -116,8 +116,8 @@ onMounted(load)
       <div class="panel-body">
         <h3 class="section-title">管理员账号</h3>
         <p class="section-sub">
-          用户名由环境变量固定；密码以 PBKDF2 哈希保存在数据库中，修改时需验证当前密码。
-          首次启动的初始密码见服务器 /var/lib/vigil/initial_admin_password，修改后会删除。
+          管理员用户名固定不可修改；修改密码时需验证当前密码。
+          首次启动的初始密码由安装程序生成，修改后会删除。
         </p>
         <div class="meta-line">
           <span class="muted">用户名</span>
@@ -168,9 +168,9 @@ onMounted(load)
 
     <section class="panel">
       <div class="panel-body">
-        <h3 class="section-title">数据保留与磁盘水位</h3>
+        <h3 class="section-title">数据保留与磁盘告警</h3>
         <p class="section-sub">
-          保留天数仅影响心跳、beacon 与事件明细；磁盘使用率超过阈值时发送系统告警。
+          保留天数仅影响心跳与事件明细；磁盘使用率超过阈值时会发送系统告警。
         </p>
         <div class="grid">
           <label class="field">
@@ -214,7 +214,7 @@ onMounted(load)
       <div class="panel-body">
         <h3 class="section-title">客户端密钥</h3>
         <p class="section-sub">
-          secret 仅存哈希，无法查看明文。需要更换时请在客户端详情页轮换，新 secret 只显示一次，
+          客户端密钥只保存加密摘要，无法查看明文。需要更换时请在客户端详情页轮换，新密钥只显示一次，
           并需同步更新设备上的配置。
         </p>
         <router-link class="panel-link" to="/clients">前往客户端列表 →</router-link>

@@ -158,11 +158,11 @@ onMounted(load)
           </div>
           <div class="meta-row">
             <span>client_id <span class="mono">{{ data.server.client_id || '未分配' }}</span></span>
-            <span>配置轮询 {{ data.server.config_poll_interval }}s</span>
-            <span>TLS 校验 {{ data.server.verify_tls ? '开启' : '关闭' }}</span>
+            <span>配置同步 {{ data.server.config_poll_interval }}s</span>
+            <span>证书校验 {{ data.server.verify_tls ? '开启' : '关闭' }}</span>
           </div>
           <el-alert class="hint" type="info" :closable="false" show-icon>
-            若地址不可达，客户端将无法接收服务端下发的守护项与策略，但本地检测与恢复仍会运行。
+            若地址不可达，客户端将无法接收服务端策略，但本地检测与自动恢复仍会运行。
           </el-alert>
         </div>
       </div>
@@ -171,7 +171,7 @@ onMounted(load)
         <div class="panel-head">
           <div>
             <h3 class="panel-title">全局动作安全上限</h3>
-            <p class="panel-sub">对所有 Guard 的恢复动作生效，优先级高于配置文件旧字段</p>
+            <p class="panel-sub">对所有守护项的恢复动作生效，优先级高于本地配置中的旧设置</p>
           </div>
         </div>
         <div class="panel-body">
@@ -265,7 +265,7 @@ onMounted(load)
             <div><dt>配置文件</dt><dd class="mono">{{ data.config_path || '—' }}</dd></div>
             <div>
               <dt>守护项来源</dt>
-              <dd>{{ data.guards_source === 'server' ? '服务端下发' : '本地配置' }}</dd>
+              <dd>{{ data.guards_source === 'server' ? '服务端托管' : '本地配置' }}</dd>
             </div>
           </dl>
         </div>

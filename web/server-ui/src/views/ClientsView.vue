@@ -167,7 +167,7 @@ const stream = useServerStream({ onUpdate: () => poll.refresh() })
           <template #empty>
             <EmptyState
               title="暂无客户端"
-              description="等待 agent 注册并上报心跳后，这里会显示客户端列表。"
+              description="等待客户端注册并上报心跳后，这里会显示客户端列表。"
             />
           </template>
         </el-table>

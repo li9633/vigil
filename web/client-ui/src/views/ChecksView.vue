@@ -173,7 +173,7 @@ const poll = usePolling(load, {
               <p class="list-title">
                 {{ check.name || check.id }}
                 <span class="mono tag">{{ check.probe || '—' }}</span>
-                <span v-if="check.probe_missing" class="mono tag tag--critical">probe 缺失</span>
+                <span v-if="check.probe_missing" class="mono tag tag--critical">探测器缺失</span>
                 <span v-if="check.enabled === false" class="mono tag">已停用</span>
               </p>
               <p class="list-meta">{{ check.evidence || '暂无证据' }}</p>
@@ -181,7 +181,7 @@ const poll = usePolling(load, {
                 参数 {{ jsonText(check.params) }}
               </p>
               <p class="list-meta mono">
-                期望 {{ jsonText(check.expect) }}
+                判定条件 {{ jsonText(check.expect) }}
               </p>
               <p class="list-meta">
                 依赖 {{ dependsText(check) }} · 超时 {{ check.timeout ?? '—' }}s · 间隔
@@ -214,9 +214,9 @@ const poll = usePolling(load, {
           <StatusTag :status="testResult.status" size="sm" />
           <span class="muted">{{ formatLatency(testResult.latency_ms) }}</span>
         </div>
-        <p class="result-label">Check 定义</p>
+        <p class="result-label">检测项定义</p>
         <pre class="code-block">{{ pretty(testResult.check) }}</pre>
-        <p class="result-label">Evidence</p>
+        <p class="result-label">判定证据</p>
         <pre class="code-block">{{ pretty(testResult.evidence) }}</pre>
       </div>
       <template #footer>

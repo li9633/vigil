@@ -385,8 +385,8 @@ function buildPayload(): CheckDefinition[] {
     }
 
     const kind = expectKind(check)
-    if (!kind) errors.push(`${label}：expect.kind 不能为空`)
-    else if (!EXPECT_KINDS.includes(kind)) errors.push(`${label}：expect.kind 非法`)
+    if (!kind) errors.push(`${label}：判定类型不能为空`)
+    else if (!EXPECT_KINDS.includes(kind)) errors.push(`${label}：判定类型不支持`)
 
     const timeout =
       check.timeout === null || check.timeout === undefined
@@ -607,7 +607,7 @@ function submit(): void {
               <span class="form-section__title">期望判定</span>
               <div class="form-grid form-grid--tight">
                 <label class="field">
-                  <span>kind</span>
+                  <span>判定类型</span>
                   <select
                     class="g-input"
                     :value="expectKind(current)"
@@ -687,7 +687,7 @@ function submit(): void {
             <div class="form-section">
               <div class="form-section__head">
                 <span class="form-section__title">依赖</span>
-                <span class="muted">被 Guard 引用时按依赖闭包执行</span>
+                <span class="muted">被守护项引用时，按依赖顺序执行</span>
               </div>
               <div v-if="dependencyOptions(current).length" class="dep-picker">
                 <label

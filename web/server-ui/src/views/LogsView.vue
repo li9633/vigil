@@ -143,7 +143,7 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h2 class="page-title">服务端日志</h2>
-        <p class="page-sub">共 {{ logs.length }} 条 · 合并 api / worker 两个实例</p>
+        <p class="page-sub">共 {{ logs.length }} 条 · 服务端运行日志</p>
       </div>
       <div class="head-actions">
         <el-button size="small" type="primary" plain @click="exportLogs">导出</el-button>
@@ -165,21 +165,21 @@ onMounted(load)
             </el-select>
           </label>
           <label class="field field--short">
-            <span class="field-label">实例</span>
+            <span class="field-label">来源</span>
             <el-select v-model="instance" size="small" clearable @change="load">
               <el-option label="全部" value="" />
-              <el-option label="api" value="api" />
-              <el-option label="worker" value="worker" />
+              <el-option label="接口服务" value="api" />
+              <el-option label="后台任务" value="worker" />
             </el-select>
           </label>
           <label class="field">
-            <span class="field-label">事件前缀</span>
+            <span class="field-label">事件类型</span>
             <el-autocomplete
               v-model="event"
               size="small"
               clearable
               :fetch-suggestions="queryEventHints"
-              placeholder="如 incident. 或 notify."
+              placeholder="如 incident 或 notify"
               @keyup.enter="load"
               @clear="load"
               @select="load"
@@ -191,18 +191,18 @@ onMounted(load)
               v-model="clientId"
               size="small"
               clearable
-              placeholder="client_id"
+              placeholder="输入客户端 ID"
               @keyup.enter="load"
               @clear="load"
             />
           </label>
           <label class="field">
-            <span class="field-label">请求 ID</span>
+            <span class="field-label">请求编号</span>
             <el-input
               v-model="requestId"
               size="small"
               clearable
-              placeholder="request_id"
+              placeholder="输入请求编号"
               @keyup.enter="load"
               @clear="load"
             />

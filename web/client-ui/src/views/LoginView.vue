@@ -79,7 +79,7 @@ async function submit() {
         </el-button>
       </el-form>
 
-      <p class="foot">令牌仅用于本机 LAN 访问，请勿在公网暴露 8787 端口。</p>
+      <p class="foot">仅限本机局域网访问，请勿将管理端口暴露到公网。</p>
     </div>
   </div>
 </template>
