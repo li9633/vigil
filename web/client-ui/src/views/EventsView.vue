@@ -100,7 +100,7 @@ const poll = usePolling(load, {
             <p class="list-title">{{ event.message || event.type }}</p>
             <p class="list-meta">
               {{ event.module || 'system' }} · {{ event.type }} ·
-              <TimeText :value="event.ts" mode="datetime" />
+              <TimeText :value="event.ts" />
             </p>
           </div>
           <div class="list-side">
