@@ -12,6 +12,7 @@ from app.logstore import configure_logging, log_event
 from app.policies import effective_settings
 from app.retention import purge_expired
 from app.security import purge_expired_nonces
+from app.services import pairing_service
 from app.services.notification_service import (
     load_config,
     pending_recovery_incidents,
@@ -42,6 +43,7 @@ def run_forever(settings: Settings) -> None:
                 )
                 touched.extend(scan_guards(db, now))
                 purged = purge_expired_nonces(db, now, settings.nonce_ttl_seconds)
+                pairing_service.expire_pairings(db, settings, now)
                 if time.monotonic() - last_purge >= 3600:
                     removed = purge_expired(db, now, effective.retention_days)
                     last_purge = time.monotonic()

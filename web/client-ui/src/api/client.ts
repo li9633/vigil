@@ -61,6 +61,14 @@ export const clientApi = {
   saveSettings: (payload: ClientSettingsUpdate) =>
     api.put<ClientSettingsSnapshot>('/api/settings', payload),
 
+  startPairing: (baseUrl: string) =>
+    api.post<ClientSettingsSnapshot>('/api/pairing', { base_url: baseUrl }, { timeoutMs: 20000 }),
+
+  pollPairing: () =>
+    api.post<ClientSettingsSnapshot>('/api/pairing/poll', {}, { timeoutMs: 20000 }),
+
+  cancelPairing: () => api.delete<ClientSettingsSnapshot>('/api/pairing'),
+
   events: (limit = 100) => api.get<ListResponse<ClientEvent>>('/api/events', { query: { limit } }),
 
   logs: (query: LogQuery = {}) =>

@@ -32,6 +32,7 @@ from ..runtime import (
     read_uptime,
 )
 from ..utils.proc import run_command
+from . import pairing_service
 
 _LAN_IP_TTL = 30.0
 _LAN_IP_CACHE = {"at": 0.0, "value": ""}
@@ -318,6 +319,7 @@ def build_settings(app):
             "remaining_seconds": max(0, int(until - now)),
         },
         "guards_source": app.guards_source,
+        "pairing": pairing_service.public_state(app),
         "generated_at": int(now),
     }
 

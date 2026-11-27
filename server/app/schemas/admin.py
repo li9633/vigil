@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class IncidentItem(BaseModel):
@@ -166,3 +166,36 @@ class AuditItem(BaseModel):
 class AuditListResponse(BaseModel):
     items: list[AuditItem]
     total: int
+
+
+class PairingItem(BaseModel):
+    request_id: str
+    instance_id: str
+    name: str
+    model: str
+    fw_version: str
+    agent_version: str
+    client_ip: str
+    status: str
+    attempts: int
+    client_id: str
+    created_at: str | None
+    expires_at: str | None
+    code_expires_at: str | None
+    approved_at: str | None
+    approved_by: str | None
+    claimed_at: str | None
+    denied_at: str | None
+    denied_reason: str | None
+
+
+class PairingListResponse(BaseModel):
+    items: list[PairingItem]
+
+
+class PairingApproveRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=32)
+
+
+class PairingDenyRequest(BaseModel):
+    reason: str = Field(default="", max_length=255)

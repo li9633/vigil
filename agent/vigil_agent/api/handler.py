@@ -134,6 +134,15 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
         if method == "PUT" and path == "/api/settings":
             self._handle_settings_update()
             return
+        if method == "POST" and path == "/api/pairing":
+            self._handle_pairing_start()
+            return
+        if method == "POST" and path == "/api/pairing/poll":
+            self._handle_pairing(self.server.pairing_poll_handler)
+            return
+        if method == "DELETE" and path == "/api/pairing":
+            self._handle_pairing(self.server.pairing_cancel_handler)
+            return
 
         self._send_json(404, {"error": "not_found"})
 
@@ -252,6 +261,47 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             return
         except Exception:
             LOGGER.exception("更新客户端设置失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_pairing_start(self):
+        """POST /api/pairing：保存服务端地址并发起配对。"""
+        handler = self.server.pairing_start_handler
+        if handler is None:
+            self._send_json(500, {"error": "配对未启用"})
+            return
+        body, error = self._read_json()
+        if error:
+            self._send_json(400, {"error": error})
+            return
+        base_url = body.get("base_url")
+        if not isinstance(base_url, str):
+            self._send_json(400, {"error": "base_url 必须是字符串"})
+            return
+        try:
+            payload = handler(base_url)
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "配对失败"})
+            return
+        except Exception:
+            LOGGER.exception("发起配对失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_pairing(self, handler):
+        """POST /api/pairing/poll 与 DELETE /api/pairing。"""
+        if handler is None:
+            self._send_json(500, {"error": "配对未启用"})
+            return
+        try:
+            payload = handler()
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "配对操作失败"})
+            return
+        except Exception:
+            LOGGER.exception("配对操作失败")
             self._send_json(500, {"error": "internal_error"})
             return
         self._send_json(200, payload)

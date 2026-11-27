@@ -24,6 +24,38 @@ class RegisterResponse(BaseModel):
     heartbeat_interval: int
 
 
+class PairingStartRequest(BaseModel):
+    """客户端发起配对：code 由客户端生成并展示，服务端只存 HMAC。"""
+
+    instance_id: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    model: str = Field(default="", max_length=64)
+    fw_version: str = Field(default="", max_length=64)
+    agent_version: str = Field(default="", max_length=32)
+    code: str = Field(min_length=4, max_length=32)
+    protocol: int = 1
+
+
+class PairingStartResponse(BaseModel):
+    request_id: str
+    # 仅在创建请求时返回一次，客户端必须安全保存用于轮询与领取
+    claim_token: str
+    server_time: int
+    expires_at: int
+    code_expires_at: int
+
+
+class PairingStatusResponse(BaseModel):
+    status: str
+    server_time: int
+    expires_at: int | None = None
+    code_expires_at: int | None = None
+    reason: str | None = None
+    client_id: str | None = None
+    secret: str | None = None
+    heartbeat_interval: int | None = None
+
+
 class BeaconRequest(BaseModel):
     client_id: str
     seq: int = 0

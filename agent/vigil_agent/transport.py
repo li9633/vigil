@@ -311,6 +311,39 @@ class Transport:
         result["saved"] = self._persist()
         return result
 
+    def create_pairing(
+        self,
+        instance_id,
+        name,
+        code,
+        model="",
+        fw_version="",
+        protocol=None,
+    ):
+        """发起配对：配对码由客户端生成并展示，服务端仅存 HMAC。"""
+        body = {
+            "instance_id": instance_id,
+            "name": name,
+            "model": model,
+            "fw_version": fw_version,
+            "agent_version": __version__,
+            "code": code,
+            "protocol": PROTOCOL_VERSION if protocol is None else int(protocol),
+        }
+        return self._request(
+            "POST", "/api/v1/pairing/requests", body=body, retries=1
+        )
+
+    def pairing_status(self, request_id, claim_token):
+        """凭 claim_token 轮询；approved 时返回一次性领取的凭证。"""
+        extra = {"Authorization": "Pair %s" % claim_token}
+        return self._request(
+            "GET",
+            "/api/v1/pairing/requests/%s" % request_id,
+            extra_headers=extra,
+            retries=1,
+        )
+
     def beacon(self, seq, uptime, boot_id=None):
         error = self._require_registered()
         if error:

@@ -676,6 +676,17 @@ export interface ClientSettings {
   version?: string | null
 }
 
+/** 客户端配对状态（GET /api/settings → pairing） */
+export interface ClientPairingState {
+  status: 'idle' | 'pending' | 'code_expired' | 'paired' | 'denied' | 'expired' | string
+  code: string
+  code_expires_at: number
+  expires_at: number
+  last_error: string
+  client_id?: string
+  server_url?: string
+}
+
 /** 客户端运行设置快照（GET /api/settings） */
 export interface ClientSettingsSnapshot {
   version: string
@@ -689,6 +700,7 @@ export interface ClientSettingsSnapshot {
     config_poll_interval: number
     verify_tls: boolean
   }
+  pairing?: ClientPairingState
   action_safety: {
     global_enabled: boolean
     max_risk_level: string
@@ -719,4 +731,30 @@ export interface ClientSettingsUpdate {
 /** 客户端登录（POST /api/login） */
 export interface ClientLoginRequest {
   token: string
+}
+
+/** 服务端待审批配对请求 */
+export interface PairingRequest {
+  request_id: string
+  instance_id: string
+  name: string
+  model: string
+  fw_version: string
+  agent_version: string
+  client_ip: string
+  status: string
+  attempts: number
+  client_id: string
+  created_at: string | null
+  expires_at: string | null
+  code_expires_at: string | null
+  approved_at: string | null
+  approved_by: string | null
+  claimed_at: string | null
+  denied_at: string | null
+  denied_reason: string | null
+}
+
+export interface PairingListResponse {
+  items: PairingRequest[]
 }

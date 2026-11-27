@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.client import beacon, config, events, heartbeat, register
+from app.api.client import beacon, config, events, heartbeat, pairing, register
 
 router = APIRouter(prefix="/api/v1", tags=["client"])
 router.include_router(register.router)
+router.include_router(pairing.router)
 router.include_router(beacon.router)
 router.include_router(heartbeat.router)
 router.include_router(events.router)

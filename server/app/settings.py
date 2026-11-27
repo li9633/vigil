@@ -46,6 +46,15 @@ class Settings:
     session_max_age: int = field(default=12 * 3600)
     session_https_only: bool = False
 
+    # 配对流程：请求有效期默认 24h，配对码短 TTL，失败次数与创建频率受限
+    pairing_pepper: str = ""
+    pairing_request_ttl_seconds: int = 24 * 3600
+    pairing_code_ttl_seconds: int = 600
+    pairing_code_max_attempts: int = 5
+    pairing_rate_limit: int = 5
+    pairing_rate_window_seconds: int = 3600
+    pairing_retention_days: int = 7
+
     log_dir: str = "/var/lib/vigil/logs"
     log_max_bytes: int = 10 * 1024 * 1024
     log_backups: int = 5
@@ -82,6 +91,23 @@ class Settings:
             ),
             flapping_threshold=_env_int("VIGIL_FLAPPING_THRESHOLD", cls.flapping_threshold),
             session_https_only=_env_bool("VIGIL_SESSION_HTTPS_ONLY", cls.session_https_only),
+            pairing_pepper=_env_str("VIGIL_PAIRING_PEPPER", cls.pairing_pepper),
+            pairing_request_ttl_seconds=_env_int(
+                "VIGIL_PAIRING_REQUEST_TTL_SECONDS", cls.pairing_request_ttl_seconds
+            ),
+            pairing_code_ttl_seconds=_env_int(
+                "VIGIL_PAIRING_CODE_TTL_SECONDS", cls.pairing_code_ttl_seconds
+            ),
+            pairing_code_max_attempts=_env_int(
+                "VIGIL_PAIRING_CODE_MAX_ATTEMPTS", cls.pairing_code_max_attempts
+            ),
+            pairing_rate_limit=_env_int("VIGIL_PAIRING_RATE_LIMIT", cls.pairing_rate_limit),
+            pairing_rate_window_seconds=_env_int(
+                "VIGIL_PAIRING_RATE_WINDOW_SECONDS", cls.pairing_rate_window_seconds
+            ),
+            pairing_retention_days=_env_int(
+                "VIGIL_PAIRING_RETENTION_DAYS", cls.pairing_retention_days
+            ),
             log_dir=_env_str("VIGIL_LOG_DIR", cls.log_dir),
             log_max_bytes=_env_int("VIGIL_LOG_MAX_BYTES", cls.log_max_bytes),
             log_backups=_env_int("VIGIL_LOG_BACKUPS", cls.log_backups),

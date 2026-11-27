@@ -162,7 +162,7 @@ flowchart LR
 | 组件 | 要求 |
 | --- | --- |
 | 路由器 | OpenWrt 22.03+（含 23.05 / 24.10、iStoreOS、ImmortalWrt 等） |
-| 客户端依赖 | `python3-light`、`python3-urllib`、`python3-openssl` |
+| 客户端依赖 | `python3-light`、`python3-codecs`、`python3-logging`、`python3-urllib`、`python3-openssl`、`python3-uuid` |
 | 服务端 | Linux VPS，Python 3.12（推荐 [uv](https://github.com/astral-sh/uv)），SQLite |
 | 前端开发 | Node.js >= 20，npm |
 | 可选 | nginx、systemd |
@@ -213,7 +213,22 @@ opkg install /tmp/vigil-agent_<version>_all.ipk
 apk add --allow-untrusted /tmp/vigil-agent_<version>_noarch.apk
 ```
 
-编辑 `/etc/vigil/config.json`，至少填写服务端地址与一次性引导令牌：
+安装后通过客户端 Web UI 完成配对，无需手写令牌：
+
+1. 在 `/etc/vigil/config.json` 中设置 `httpd.token`（客户端 UI 管理员令牌），然后重启服务。
+2. 浏览器打开 `http://<路由器 LAN IP>:8787`，登录后进入「设置 → 服务端连接」。
+3. 填写服务端地址，点击「立即注册」，页面会显示 8 位配对码。
+4. 登录服务端 UI 的「配对审批」，找到该设备并输入配对码确认。
+5. 客户端会自动领取 `client_id` / `secret` 并转为已注册，无需手动复制任何令牌。
+
+重启客户端服务：
+
+```bash
+/etc/init.d/vigil enable
+/etc/init.d/vigil restart
+```
+
+无头 / 批量部署仍可使用 `bootstrap_token` 自动注册（Web 配对时可留空）：
 
 ```json
 {
@@ -233,18 +248,7 @@ apk add --allow-untrusted /tmp/vigil-agent_<version>_noarch.apk
 }
 ```
 
-重启服务：
-
-```bash
-/etc/init.d/vigil enable
-/etc/init.d/vigil restart
-```
-
-agent 会使用 bootstrap token 自动注册，并把服务端返回的 `client_id` / `secret` 写回本地配置。随后可访问客户端 UI：
-
-```text
-http://<路由器 LAN IP>:8787
-```
+配对码默认 10 分钟有效，待审批请求默认 24 小时过期；配对码只以 HMAC 形式存储在服务端，领取凭证 `claim_token` 只保存在客户端本地 `pairing.json`（0600）。
 
 安装包的 postinst 会自动注册 beacon cron、放行 LAN 8787 防火墙规则；升级时 `/etc/vigil/config.json` 受 conffiles / protected_paths 保护，不会被覆盖。
 
@@ -264,7 +268,7 @@ http://<路由器 LAN IP>:8787
 | --- | --- |
 | `schema_version` | 必须为 `3` |
 | `server.base_url` | 服务端地址 |
-| `server.bootstrap_token` | 首次注册用一次性令牌，注册成功后可留空 |
+| `server.bootstrap_token` | 无头/批量部署用一次性令牌；Web 配对时留空 |
 | `server.client_id` / `server.secret` | 注册后自动写入的客户端凭据 |
 | `server.verify_tls` | 是否校验证书，HTTPS 环境应保持 `true` |
 | `checks` | 检测项列表，本地管理 |
@@ -283,7 +287,12 @@ http://<路由器 LAN IP>:8787
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `VIGIL_DATABASE_URL` | `sqlite+pysqlite:///./vigil.db` | 数据库连接 |
-| `VIGIL_BOOTSTRAP_TOKEN` | `vigil-bootstrap-dev` | 客户端注册引导令牌，生产必须修改 |
+| `VIGIL_BOOTSTRAP_TOKEN` | `vigil-bootstrap-dev` | 无头注册引导令牌，生产必须修改 |
+| `VIGIL_PAIRING_REQUEST_TTL_SECONDS` | `86400` | 待审批配对请求有效期（秒） |
+| `VIGIL_PAIRING_CODE_TTL_SECONDS` | `600` | 配对码有效期（秒） |
+| `VIGIL_PAIRING_CODE_MAX_ATTEMPTS` | `5` | 配对码最大尝试次数，用尽后请求作废 |
+| `VIGIL_PAIRING_RATE_LIMIT` | `5` | 单 IP 在窗口期内可创建的配对请求数 |
+| `VIGIL_PAIRING_PEPPER` | 空 | 配对码 HMAC 密钥，默认复用会话密钥 |
 | `VIGIL_ADMIN_USERNAME` | `admin` | 管理员用户名 |
 | `VIGIL_ADMIN_KEY_FILE` | `/var/lib/vigil/admin.key` | 密码哈希 pepper 文件 |
 | `VIGIL_SESSION_SECRET` | `vigil-dev-session-secret-change-me` | 会话签名密钥，生产必须修改 |

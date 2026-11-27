@@ -41,6 +41,12 @@ const router = createRouter({
           meta: { title: '客户端详情' },
         },
         {
+          path: 'pairing',
+          name: 'pairing',
+          component: () => import('@/views/PairingView.vue'),
+          meta: { title: '配对审批' },
+        },
+        {
           path: 'incidents',
           name: 'incidents',
           component: () => import('@/views/IncidentsView.vue'),

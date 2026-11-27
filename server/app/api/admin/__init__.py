@@ -11,6 +11,7 @@ from app.api.admin import (
     incidents,
     logs,
     notifications,
+    pairing,
     policies,
     reads,
     stream,
@@ -23,6 +24,7 @@ router.include_router(reads.router)
 router.include_router(incidents.router)
 router.include_router(checks.router)
 router.include_router(policies.router)
+router.include_router(pairing.router)
 router.include_router(system.router)
 router.include_router(notifications.router)
 router.include_router(audit.router)

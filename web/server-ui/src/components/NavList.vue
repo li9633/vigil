@@ -19,6 +19,7 @@ const groups: NavGroup[] = [
     items: [
       { to: '/', label: '总览' },
       { to: '/clients', label: '客户端' },
+      { to: '/pairing', label: '配对审批' },
       { to: '/incidents', label: '告警中心' },
     ],
   },

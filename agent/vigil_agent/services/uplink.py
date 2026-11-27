@@ -4,7 +4,7 @@ import time
 
 from ..logstore import log_event, set_log_context
 from ..runtime import read_first_line, read_fw_version, read_uptime
-from . import guard_service, views
+from . import guard_service, pairing_service, views
 
 REGISTER_RETRY_SECONDS = 300
 
@@ -28,15 +28,38 @@ def acked_seqs(batch, acked):
 
 
 def ensure_registered(app):
-    """确保已注册；失败按固定间隔重试。返回是否已注册。"""
+    """确保已注册；已存在配对请求时优先轮询，失败按固定间隔重试。"""
     if app.transport.is_registered:
         return True
+
+    state = pairing_service.load_state(app)
+    if state and state.get("status") in pairing_service.ACTIVE_STATUSES:
+        pairing_service.poll(app)
+        return app.transport.is_registered
+
     now = time.time()
     if now < app._next_register_at:
         return False
     server = app.config.get("server") or {}
-    if not server.get("base_url") or not server.get("bootstrap_token"):
+    if not server.get("base_url"):
         app._next_register_at = now + REGISTER_RETRY_SECONDS
+        app._log_throttled(
+            "register",
+            "info",
+            "client.pairing.required",
+            "未配置服务端地址，请在设置页完成配对",
+            interval=REGISTER_RETRY_SECONDS,
+        )
+        return False
+    if not server.get("bootstrap_token"):
+        app._next_register_at = now + REGISTER_RETRY_SECONDS
+        app._log_throttled(
+            "register",
+            "info",
+            "client.pairing.required",
+            "客户端未配对，请在设置页点击立即注册",
+            interval=REGISTER_RETRY_SECONDS,
+        )
         return False
 
     result = app.transport.register(

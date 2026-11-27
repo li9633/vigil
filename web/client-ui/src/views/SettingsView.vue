@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import {
   LoadingBlock,
   StatusTag,
   TimeText,
   getErrorMessage,
   useTheme,
+  type ClientPairingState,
   type ClientSettingsSnapshot,
   type ThemeMode,
 } from '@vigil/shared'
@@ -16,7 +17,12 @@ const data = ref<ClientSettingsSnapshot | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const maintenanceBusy = ref(false)
+const pairingBusy = ref(false)
 const error = ref('')
+const pairing = ref<ClientPairingState | null>(null)
+const nowSeconds = ref(Math.floor(Date.now() / 1000))
+let pollTimer: number | undefined
+let clockTimer: number | undefined
 
 const form = reactive({
   baseUrl: '',
@@ -25,12 +31,119 @@ const form = reactive({
   maxPerHour: 3,
 })
 
+const pairingPending = computed(() => pairing.value?.status === 'pending')
+const codeRemaining = computed(() =>
+  Math.max(0, (pairing.value?.code_expires_at ?? 0) - nowSeconds.value),
+)
+const pairingLevel = computed(() => {
+  if (data.value?.server.registered) return 'OK'
+  if (pairingPending.value) return 'WARN'
+  return 'UNKNOWN'
+})
+const pairingLabel = computed(() => {
+  if (data.value?.server.registered) return '已配对'
+  switch (pairing.value?.status) {
+    case 'pending':
+      return '等待确认'
+    case 'code_expired':
+      return '配对码已过期'
+    case 'denied':
+      return '已拒绝'
+    case 'expired':
+      return '已过期'
+    default:
+      return '未配对'
+  }
+})
+
 function hydrate(snapshot: ClientSettingsSnapshot) {
   data.value = snapshot
   form.baseUrl = snapshot.server.base_url
   form.heartbeat = snapshot.server.heartbeat_interval
   form.enabled = snapshot.action_safety.global_enabled
   form.maxPerHour = snapshot.action_safety.max_actions_per_hour
+  pairing.value = snapshot.pairing ?? null
+  if (pairingPending.value) {
+    startPolling()
+  } else {
+    stopPolling()
+  }
+}
+
+function formatRemaining(seconds: number) {
+  const minutes = Math.floor(seconds / 60)
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+function startPolling() {
+  if (pollTimer !== undefined) return
+  pollTimer = window.setInterval(pollPairing, 3000)
+}
+
+function stopPolling() {
+  if (pollTimer === undefined) return
+  window.clearInterval(pollTimer)
+  pollTimer = undefined
+}
+
+async function pollPairing() {
+  if (!pairingPending.value) {
+    stopPolling()
+    return
+  }
+  try {
+    const snapshot = await clientApi.pollPairing()
+    hydrate(snapshot)
+    if (snapshot.server.registered) {
+      ElMessage.success('配对成功，客户端已注册')
+    }
+  } catch (err) {
+    pairing.value = {
+      ...(pairing.value as ClientPairingState),
+      last_error: getErrorMessage(err, '轮询配对状态失败'),
+    }
+  }
+}
+
+async function startPairing() {
+  if (pairingBusy.value) return
+  const baseUrl = form.baseUrl.trim()
+  if (!/^https?:\/\/\S+$/i.test(baseUrl)) {
+    ElMessage.warning('请先填写正确的服务端地址')
+    return
+  }
+  pairingBusy.value = true
+  try {
+    hydrate(await clientApi.startPairing(baseUrl))
+    ElMessage.success('已发起配对，请在服务端输入配对码确认')
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '发起配对失败'))
+  } finally {
+    pairingBusy.value = false
+  }
+}
+
+async function cancelPairing() {
+  pairingBusy.value = true
+  try {
+    hydrate(await clientApi.cancelPairing())
+    ElMessage.info('已取消本地配对')
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '取消配对失败'))
+  } finally {
+    pairingBusy.value = false
+  }
+}
+
+async function copyPairingCode() {
+  const code = (pairing.value?.code || '').replace('-', '')
+  if (!code) return
+  try {
+    await navigator.clipboard.writeText(code)
+    ElMessage.success('配对码已复制')
+  } catch {
+    ElMessage.warning('复制失败，请手动选择配对码')
+  }
 }
 
 async function load() {
@@ -93,7 +206,17 @@ function changeTheme(value: string | number | boolean) {
   setTheme(String(value) as ThemeMode)
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  clockTimer = window.setInterval(() => {
+    nowSeconds.value = Math.floor(Date.now() / 1000)
+  }, 1000)
+})
+
+onUnmounted(() => {
+  stopPolling()
+  if (clockTimer !== undefined) window.clearInterval(clockTimer)
+})
 </script>
 
 <template>
@@ -137,33 +260,82 @@ onMounted(load)
         <div class="panel-head">
           <div>
             <h3 class="panel-title">服务端连接</h3>
-            <p class="panel-sub">地址修改后立即生效，并会重新拉取服务端策略</p>
+            <p class="panel-sub">
+              填写地址后点击「立即注册」，把配对码交给服务端管理员确认即可，无需手动配置令牌
+            </p>
           </div>
-          <StatusTag
-            :status="data.server.registered ? 'OK' : 'UNKNOWN'"
-            :label="data.server.registered ? '已注册' : '未注册'"
-            size="sm"
-          />
+          <StatusTag :status="pairingLevel" :label="pairingLabel" size="sm" />
         </div>
         <div class="panel-body">
           <div class="form-grid">
             <label class="field">
               <span class="field-label">服务端地址</span>
-              <el-input v-model="form.baseUrl" placeholder="http://vigil.example.com:5000" />
+              <el-input
+                v-model="form.baseUrl"
+                placeholder="http://vigil.example.com:5000"
+                :disabled="data.server.registered"
+              />
             </label>
             <label class="field">
               <span class="field-label">心跳间隔（秒）</span>
               <el-input-number v-model="form.heartbeat" :min="10" :max="300" :step="10" />
             </label>
+            <div class="field">
+              <span class="field-label">配对</span>
+              <el-button
+                type="primary"
+                :loading="pairingBusy"
+                :disabled="data.server.registered"
+                @click="startPairing"
+              >
+                {{ pairingPending ? '重新生成配对码' : '立即注册' }}
+              </el-button>
+            </div>
           </div>
+
+          <div v-if="pairingPending" class="pair-box">
+            <div>
+              <div class="pair-label">配对码</div>
+              <div class="pair-code mono">{{ pairing?.code }}</div>
+            </div>
+            <div class="pair-side">
+              <span class="muted">剩余 {{ formatRemaining(codeRemaining) }}</span>
+              <div class="actions">
+                <el-button size="small" @click="copyPairingCode">复制</el-button>
+                <el-button size="small" type="danger" plain :loading="pairingBusy" @click="cancelPairing">
+                  取消
+                </el-button>
+              </div>
+            </div>
+          </div>
+
+          <el-alert v-if="pairingPending" class="hint" type="info" :closable="false" show-icon>
+            在服务端「配对审批」中找到本设备，输入上面的配对码并确认；成功后本页会自动刷新为已注册。
+          </el-alert>
+          <el-alert
+            v-else-if="pairing && ['code_expired', 'expired', 'denied'].includes(pairing.status)"
+            class="hint"
+            type="warning"
+            :closable="false"
+            show-icon
+          >
+            {{ pairing.last_error || '配对未完成，请重新发起注册' }}
+          </el-alert>
+          <el-alert
+            v-else-if="!data.server.registered"
+            class="hint"
+            type="info"
+            :closable="false"
+            show-icon
+          >
+            未配对时无法接收服务端策略，但本地检测与自动恢复仍会运行。
+          </el-alert>
+
           <div class="meta-row">
             <span>client_id <span class="mono">{{ data.server.client_id || '未分配' }}</span></span>
             <span>配置同步 {{ data.server.config_poll_interval }}s</span>
             <span>证书校验 {{ data.server.verify_tls ? '开启' : '关闭' }}</span>
           </div>
-          <el-alert class="hint" type="info" :closable="false" show-icon>
-            若地址不可达，客户端将无法接收服务端策略，但本地检测与自动恢复仍会运行。
-          </el-alert>
         </div>
       </div>
 
@@ -317,6 +489,36 @@ onMounted(load)
 
 .hint {
   margin-top: var(--vigil-space-3);
+}
+
+.pair-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--vigil-space-3);
+  margin-top: var(--vigil-space-3);
+  padding: var(--vigil-space-3);
+  border: 1px dashed var(--vigil-color-border);
+  border-radius: var(--vigil-radius-md);
+}
+
+.pair-label {
+  color: var(--vigil-color-text-muted);
+  font-size: var(--vigil-font-size-sm);
+}
+
+.pair-code {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: 4px;
+}
+
+.pair-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--vigil-space-1);
 }
 
 .service-tag {

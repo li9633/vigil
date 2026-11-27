@@ -30,9 +30,38 @@ class Client(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class PairingRequest(Base):
+    """客户端配对请求：管理员用配对码确认后，客户端凭 claim_token 领取凭证。"""
+
+    __tablename__ = "pairing_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    instance_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    model: Mapped[str] = mapped_column(String(64), default="")
+    fw_version: Mapped[str] = mapped_column(String(64), default="")
+    agent_version: Mapped[str] = mapped_column(String(32), default="")
+    client_ip: Mapped[str] = mapped_column(String(64), default="")
+    # 配对码只存 HMAC；claim_token 只存 SHA-256
+    code_hmac: Mapped[str] = mapped_column(String(64), default="")
+    code_expires_at: Mapped[datetime] = mapped_column(DateTime)
+    claim_sha256: Mapped[str] = mapped_column(String(64))
+    # pending / approved / claimed / denied / expired
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    client_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    denied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    denied_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class Beacon(Base):
     __tablename__ = "beacons"
-
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     client_id: Mapped[str] = mapped_column(String(64), index=True)
     received_at: Mapped[datetime] = mapped_column(DateTime)

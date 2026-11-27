@@ -1,4 +1,4 @@
-import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type AdminSystemSettings, type AuditQuery, type AuditResponse, type Client, type ClientDetail, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type PolicyResponse, type PolicySettings, type RotateSecretResponse, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
+import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type AdminSystemSettings, type AuditQuery, type AuditResponse, type Client, type ClientDetail, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type PairingListResponse, type PairingRequest, type PolicyResponse, type PolicySettings, type RotateSecretResponse, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
 
 export interface IncidentQuery {
   state?: string
@@ -54,6 +54,20 @@ export const adminApi = {
 
   policies: () => api.get<PolicyResponse>('/api/v1/admin/policies'),
 
+  pairings: (status = 'pending') =>
+    api.get<PairingListResponse>('/api/v1/admin/pairing', { query: { status } }),
+
+  approvePairing: (requestId: string, code: string) =>
+    api.post<PairingRequest>(
+      `/api/v1/admin/pairing/${encodeURIComponent(requestId)}/approve`,
+      { code },
+    ),
+
+  denyPairing: (requestId: string, reason = '') =>
+    api.post<PairingRequest>(
+      `/api/v1/admin/pairing/${encodeURIComponent(requestId)}/deny`,
+      { reason },
+    ),
   savePolicies: (policies: Partial<PolicySettings>) =>
     api.put<PolicyResponse>('/api/v1/admin/policies', policies),
 

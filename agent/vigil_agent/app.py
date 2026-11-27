@@ -39,7 +39,7 @@ from .probes.builtin import builtin_registry
 from .probes.loader import DEFAULT_PROBES_DIR, LocalProbeStore
 from .runtime import RuntimeState, Watchdog, prepare_storage
 from .scheduler import IntervalScheduler
-from .services import check_service, guard_service, uplink, views
+from .services import check_service, guard_service, pairing_service, uplink, views
 from .spool import EventSpool
 from .transport import Transport
 
@@ -588,6 +588,20 @@ class AgentApp:
         return self.api_guards()
 
     def api_settings(self):
+        if not self.transport.is_registered:
+            pairing_service.poll(self)
+        return views.build_settings(self)
+
+    def api_pairing_start(self, base_url):
+        pairing_service.start(self, base_url)
+        return views.build_settings(self)
+
+    def api_pairing_poll(self):
+        pairing_service.poll(self, force=True)
+        return views.build_settings(self)
+
+    def api_pairing_cancel(self):
+        pairing_service.cancel(self)
         return views.build_settings(self)
 
     def api_settings_update(self, payload):
@@ -772,6 +786,9 @@ class AgentApp:
                 guards_handler=self.api_guards_update,
                 settings_provider=self.api_settings,
                 settings_handler=self.api_settings_update,
+                pairing_start_handler=self.api_pairing_start,
+                pairing_poll_handler=self.api_pairing_poll,
+                pairing_cancel_handler=self.api_pairing_cancel,
                 probes_provider=self.api_probes,
                 probes_install_handler=self.api_probe_install,
                 probes_delete_handler=self.api_probe_delete,

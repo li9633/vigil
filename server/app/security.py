@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import secrets
 import time
 from datetime import datetime, timedelta
@@ -14,6 +16,10 @@ from sqlalchemy.orm import Session
 from app.errors import ForbiddenError, UnauthorizedError
 from app.models import Client, Nonce
 from app.settings import Settings
+
+# Crockford Base32：去掉 I/L/O/U，避免人工抄写歧义
+PAIRING_CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+PAIRING_CODE_LENGTH = 8
 
 
 def sha256_hex(value: str) -> str:
@@ -53,6 +59,63 @@ def parse_bearer(authorization: str | None) -> str:
             "缺少 Bearer 凭证", headers={"WWW-Authenticate": "Bearer"}
         )
     return secret
+
+
+# ---------- 配对流程 ----------
+
+
+def normalize_pairing_code(raw: str | None) -> str:
+    """规范化用户输入的配对码；非法字符返回空串。"""
+    text = (raw or "").upper().replace(" ", "").replace("-", "")
+    text = text.replace("I", "1").replace("L", "1").replace("O", "0")
+    if len(text) != PAIRING_CODE_LENGTH:
+        return ""
+    if any(char not in PAIRING_CODE_ALPHABET for char in text):
+        return ""
+    return text
+
+
+def hash_pairing_code(code: str, pepper: str, request_id: str) -> str:
+    """配对码只以 HMAC 形式落库，避免数据库泄漏后被离线爆破。"""
+    message = ("%s:%s" % (request_id, code)).encode("utf-8")
+    return hmac.new(pepper.encode("utf-8"), message, hashlib.sha256).hexdigest()
+
+
+def new_pairing_request_id() -> str:
+    return secrets.token_hex(16)
+
+
+def new_claim_token() -> str:
+    """客户端本地保存的领取凭证，优先于低熵配对码承担认证职责。"""
+    return secrets.token_urlsafe(32)
+
+
+def hash_claim_token(token: str) -> str:
+    return sha256_hex(token)
+
+
+def derive_client_secret(claim_token: str, pepper: str) -> str:
+    """由 claim_token 确定性派生客户端 secret，服务端无需保存明文。"""
+    digest = hmac.new(
+        pepper.encode("utf-8"),
+        ("vigil-client-secret:%s" % claim_token).encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def parse_pair_authorization(authorization: str | None) -> str:
+    """解析 `Authorization: Pair <claim_token>`。"""
+    if not authorization or not authorization.lower().startswith("pair "):
+        raise UnauthorizedError(
+            "缺少配对凭证", headers={"WWW-Authenticate": "Pair"}
+        )
+    token = authorization[5:].strip()
+    if not token:
+        raise UnauthorizedError(
+            "缺少配对凭证", headers={"WWW-Authenticate": "Pair"}
+        )
+    return token
 
 
 def _parse_timestamp(raw: str | None) -> int:
