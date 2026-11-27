@@ -21,6 +21,7 @@ from ..logstore import export_log_events, filter_events, read_log_events
 from ..probes.base import (
     DetectContext,
     apply_param_defaults,
+    first_ipv4,
     validate_params,
 )
 from ..runtime import (
@@ -30,6 +31,64 @@ from ..runtime import (
     iso_utc,
     read_uptime,
 )
+from ..utils.proc import run_command
+
+_LAN_IP_TTL = 30.0
+_LAN_IP_CACHE = {"at": 0.0, "value": ""}
+
+
+def _interface_status(interface):
+    """读取逻辑接口状态；失败时返回 None。"""
+    result = run_command(
+        ["ubus", "call", "network.interface.%s" % interface, "status"], timeout=3
+    )
+    if result.timed_out or result.exit_code != 0 or not result.stdout.strip():
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _query_lan_ip():
+    """优先读取 lan 逻辑接口地址，回退到本机地址表。"""
+    ip = first_ipv4(_interface_status("lan"))
+    if ip:
+        return ip
+
+    result = run_command(["ip", "-4", "-o", "addr", "show"], timeout=3)
+    if result.timed_out or result.exit_code != 0:
+        return ""
+
+    fallback = ""
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 4 or "inet" not in parts:
+            continue
+        position = parts.index("inet")
+        if position + 1 >= len(parts):
+            continue
+        device = parts[1].rstrip(":")
+        if device == "lo" or device.startswith(("ppp", "wwan")):
+            continue
+        address = parts[position + 1].split("/")[0]
+        if device == "br-lan" or "lan" in device:
+            return address
+        if not fallback:
+            fallback = address
+    return fallback
+
+
+def lan_ip(now=None):
+    """本机局域网地址；结果缓存 30 秒，避免每次状态查询都调用 ubus。"""
+    now = time.time() if now is None else now
+    if now - float(_LAN_IP_CACHE.get("at") or 0) < _LAN_IP_TTL:
+        return str(_LAN_IP_CACHE.get("value") or "")
+    value = _query_lan_ip()
+    _LAN_IP_CACHE["at"] = now
+    _LAN_IP_CACHE["value"] = value
+    return value
 
 
 def _observed(app, checks, probe_id):
@@ -93,7 +152,7 @@ def build_status(app):
         "state": derive_client_state(checks),
         "boot_id": app.transport.boot_id,
         "wan_ip": wan.get("ip") or None,
-        "lan_ip": None,
+        "lan_ip": lan_ip(now) or None,
         "carrier": "pppoe" if wan.get("pppoe_up") else (wan.get("device") or None),
         "pppoe_uptime": wan.get("pppoe_uptime"),
         "server_connected": bool(last_heartbeat),
