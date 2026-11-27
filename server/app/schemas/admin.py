@@ -125,16 +125,6 @@ class IncidentListResponse(BaseModel):
     items: list[IncidentItem]
 
 
-class GuardListResponse(BaseModel):
-    items: list[dict[str, Any]]
-    managed: bool
-
-
-class CheckListResponse(BaseModel):
-    items: list[dict[str, Any]]
-    managed: bool
-
-
 class ProbeCatalogResponse(BaseModel):
     items: list[dict[str, Any]]
     updated_at: str | None = None

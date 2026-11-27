@@ -2,6 +2,7 @@ import {
   api,
   getApiConfig,
   type ActionExecuteResponse,
+  type CheckDefinition,
   type CheckItem,
   type CheckTestResponse,
   type ClientEvent,
@@ -25,6 +26,9 @@ export const clientApi = {
   status: () => api.get<ClientStatusSnapshot>('/api/status'),
 
   checks: () => api.get<ListResponse<CheckItem>>('/api/checks'),
+
+  saveChecks: (checks: CheckDefinition[]) =>
+    api.put<ListResponse<CheckItem>>('/api/checks', { checks }),
 
   testCheck: (id: string) =>
     api.post<CheckTestResponse>(`/api/checks/${encodeURIComponent(id)}/test`, {}, { timeoutMs: 40000 }),

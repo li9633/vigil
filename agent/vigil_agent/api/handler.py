@@ -119,6 +119,9 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/logs/export":
             self._handle_logs_export(query)
             return
+        if method == "PUT" and path == "/api/checks":
+            self._handle_checks_update()
+            return
         if method == "GET" and path == "/api/guards":
             self._serve_provider(self.server.guards_provider)
             return
@@ -142,6 +145,32 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             payload = provider(*args, **kwargs)
         except Exception:
             LOGGER.exception("本地 API 数据提供方异常")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_checks_update(self):
+        """PUT /api/checks：整表替换本地检测项配置。"""
+        body, error = self._read_json()
+        if error:
+            self._send_json(400, {"error": error})
+            return
+        checks = body.get("checks")
+        if not isinstance(checks, list):
+            self._send_json(400, {"error": "checks 必须是数组"})
+            return
+
+        handler = self.server.checks_handler
+        if handler is None:
+            self._send_json(500, {"error": "检测项编辑未启用"})
+            return
+        try:
+            payload = handler(checks)
+        except ValueError as exc:
+            self._send_json(400, {"error": str(exc) or "检测项配置非法"})
+            return
+        except Exception:
+            LOGGER.exception("更新本地检测项失败")
             self._send_json(500, {"error": "internal_error"})
             return
         self._send_json(200, payload)

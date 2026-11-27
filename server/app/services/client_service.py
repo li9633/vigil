@@ -18,7 +18,7 @@ from app.errors import UnauthorizedError, ValidationError
 from app.logstore import log_event
 from app.models import Beacon, Client
 from app.policies import effective_settings
-from app.repositories import check_repo, event_repo, guard_repo, heartbeat_repo
+from app.repositories import event_repo, heartbeat_repo
 from app.schemas import (
     BeaconRequest,
     BeaconResponse,
@@ -182,11 +182,9 @@ def record_heartbeat(
     )
     db.commit()
 
-    guards = guard_repo.load_guard_configs(db, client.client_id)
-    checks = check_repo.load_check_configs(db, client.client_id)
     return HeartbeatResponse(
         server_time=int(time.time()),
-        config_etag=policy_etag(effective, checks, guards),
+        config_etag=policy_etag(effective),
         actions_enabled=effective.actions_enabled,
     )
 
@@ -223,6 +221,4 @@ def load_policy(
 ) -> tuple[dict[str, Any], str]:
     """返回 (策略文档, ETag)，供 /config 与心跳响应复用。"""
     effective = effective_settings(db, settings)
-    guards = guard_repo.load_guard_configs(db, client.client_id)
-    checks = check_repo.load_check_configs(db, client.client_id)
-    return build_policy(effective, checks, guards), policy_etag(effective, checks, guards)
+    return build_policy(effective), policy_etag(effective)

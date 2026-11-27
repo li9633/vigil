@@ -11,15 +11,34 @@ import {
   formatLatency,
   getErrorMessage,
   usePolling,
+  type CheckDefinition,
   type CheckItem,
   type CheckTestResponse,
+  type ProbeCatalogItem,
 } from '@vigil/shared'
 import { clientApi } from '@/api/client'
+import CheckEditor from '@/components/CheckEditor.vue'
 
 const checks = ref<CheckItem[]>([])
+const probes = ref<ProbeCatalogItem[]>([])
 const loading = ref(false)
 const error = ref('')
 const testingId = ref('')
+const editorOpen = ref(false)
+const saving = ref(false)
+
+const definitions = computed<CheckDefinition[]>(() =>
+  checks.value.map((item) => ({
+    id: item.id,
+    name: item.name || item.id,
+    probe: item.probe || '',
+    params: item.params ?? {},
+    expect: item.expect ?? {},
+    timeout: item.timeout ?? null,
+    depends_on: item.depends_on ?? [],
+    enabled: item.enabled !== false,
+  })),
+)
 
 const testOpen = ref(false)
 const testTitle = ref('')
@@ -58,12 +77,31 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const payload = await clientApi.checks()
+    const [payload, probePayload] = await Promise.all([
+      clientApi.checks(),
+      clientApi.probes(),
+    ])
     checks.value = Array.isArray(payload) ? payload : payload.items ?? []
+    probes.value = Array.isArray(probePayload) ? probePayload : probePayload.items ?? []
   } catch (err) {
     error.value = getErrorMessage(err, '检测项加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function handleSave(payload: CheckDefinition[]) {
+  if (saving.value) return
+  saving.value = true
+  try {
+    await clientApi.saveChecks(payload)
+    editorOpen.value = false
+    ElMessage.success('检测项配置已保存并生效')
+    await load()
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '保存失败，请检查探测器与依赖'))
+  } finally {
+    saving.value = false
   }
 }
 
@@ -101,7 +139,10 @@ const poll = usePolling(load, {
           <span :class="{ 'text-critical': abnormalCount > 0 }">{{ abnormalCount }}</span> 项
         </p>
       </div>
-      <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
+      <div class="head-actions">
+        <LiveBadge :at="poll.lastUpdated" :paused="poll.paused" />
+        <el-button size="small" type="primary" @click="editorOpen = true">编辑配置</el-button>
+      </div>
     </div>
 
     <el-alert v-if="error" class="error-box" type="error" show-icon :closable="false">
@@ -119,6 +160,7 @@ const poll = usePolling(load, {
       description="尚未配置检测项，或接口暂无返回。"
     >
       <template #action>
+        <el-button size="small" type="primary" @click="editorOpen = true">新增检测项</el-button>
         <el-button size="small" @click="poll.retry">重新加载</el-button>
       </template>
     </EmptyState>
@@ -181,6 +223,14 @@ const poll = usePolling(load, {
         <el-button @click="testOpen = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <CheckEditor
+      v-model="editorOpen"
+      :checks="definitions"
+      :probes="probes"
+      :busy="saving"
+      @save="handleSave"
+    />
 
     <RefreshFab
       :loading="poll.refreshing"

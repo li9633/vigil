@@ -4,7 +4,6 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   EmptyState,
-  GuardEditor,
   LiveBadge,
   LoadingBlock,
   RefreshFab,
@@ -14,14 +13,10 @@ import {
   formatLatency,
   getErrorMessage,
   usePolling,
-  type CheckDefinition,
   type ClientDetail,
-  type GuardDefinition,
   type Incident,
-  type ProbeCatalogItem,
 } from '@vigil/shared'
 import { adminApi } from '@/api/admin'
-import CheckEditor from '@/components/CheckEditor.vue'
 import LatencyChart from '@/components/LatencyChart.vue'
 
 const route = useRoute()
@@ -30,21 +25,6 @@ const clientId = computed(() => String(route.params.id ?? ''))
 const detail = ref<ClientDetail | null>(null)
 const loading = ref(false)
 const error = ref('')
-
-const guardConfig = ref<GuardDefinition[]>([])
-const guardManaged = ref(false)
-const guardError = ref('')
-const guardSaving = ref(false)
-const guardEditorOpen = ref(false)
-const guardEditorSelected = ref('')
-
-const checkConfig = ref<CheckDefinition[]>([])
-const checkManaged = ref(false)
-const checkError = ref('')
-const checkSaving = ref(false)
-const checkEditorOpen = ref(false)
-const probes = ref<ProbeCatalogItem[]>([])
-const probeUpdatedAt = ref<string | null>(null)
 
 const client = computed(() => detail.value?.client ?? null)
 const guards = computed(() => detail.value?.guards ?? [])
@@ -66,66 +46,25 @@ const events = computed(() =>
 )
 const actions = computed(() => detail.value?.actions ?? [])
 
-interface CheckRow extends CheckDefinition {
+interface CheckRow {
+  id: string
+  name: string
+  probe: string
   status: string
   latency_ms: number | null
   evidence: Record<string, unknown> | null
-  probe_missing: boolean
-  local?: boolean
 }
 
-const latestChecks = computed(() => {
-  const map = new Map<string, NonNullable<ClientDetail['checks']>[number]>()
-  for (const item of detail.value?.checks ?? []) map.set(item.check_id, item)
-  return map
-})
-
-const probeIds = computed(() => new Set(probes.value.map((probe) => probe.id)))
-
-const checkRows = computed<CheckRow[]>(() => {
-  if (checkConfig.value.length) {
-    return checkConfig.value.map((check) => {
-      const latest = latestChecks.value.get(check.id)
-      return {
-        ...check,
-        status: check.enabled === false ? 'skipped' : latest?.status || 'unknown',
-        latency_ms: latest?.latency_ms ?? null,
-        evidence: latest?.evidence ?? null,
-        probe_missing: probes.value.length > 0 && !probeIds.value.has(check.probe),
-      }
-    })
-  }
-  // 未下发时展示客户端本地检测项的最近结果，便于以现状创建服务端配置
-  return (detail.value?.checks ?? []).map((item) => ({
+const checkRows = computed<CheckRow[]>(() =>
+  (detail.value?.checks ?? []).map((item) => ({
     id: item.check_id,
     name: item.name || item.check_id,
     probe: item.probe || '',
-    params: {},
-    expect: {},
-    timeout: null,
-    depends_on: [],
-    enabled: true,
     status: item.status || 'unknown',
     latency_ms: item.latency_ms ?? null,
     evidence: item.evidence ?? null,
-    probe_missing: probes.value.length > 0 && !probeIds.value.has(item.probe || ''),
-    local: true,
-  }))
-})
-
-const checkEditorSeed = computed<CheckDefinition[]>(() => {
-  if (checkConfig.value.length) return checkConfig.value
-  return checkRows.value.map((row) => ({
-    id: row.id,
-    name: row.name,
-    probe: row.probe,
-    params: {},
-    expect: {},
-    timeout: null,
-    depends_on: [],
-    enabled: true,
-  }))
-})
+  })),
+)
 
 const hasChartData = computed(() => {
   const points = heartbeats.value
@@ -151,123 +90,12 @@ async function load() {
   }
   loading.value = true
   error.value = ''
-  guardError.value = ''
-  checkError.value = ''
   try {
-    const [detailData, guardData, checkData, probeData] = await Promise.all([
-      adminApi.client(clientId.value),
-      adminApi.clientGuards(clientId.value).catch((err) => {
-        guardError.value = getErrorMessage(err, '守护项配置加载失败')
-        return null
-      }),
-      adminApi.clientChecks(clientId.value).catch((err) => {
-        checkError.value = getErrorMessage(err, '检测项配置加载失败')
-        return null
-      }),
-      adminApi.clientProbes(clientId.value).catch((err) => {
-        checkError.value = getErrorMessage(err, '探测器目录加载失败')
-        return null
-      }),
-    ])
-    detail.value = detailData
-    if (guardData) {
-      guardConfig.value = Array.isArray(guardData.items) ? guardData.items : []
-      guardManaged.value = Boolean(guardData.managed)
-    }
-    if (checkData) {
-      checkConfig.value = Array.isArray(checkData.items) ? checkData.items : []
-      checkManaged.value = Boolean(checkData.managed)
-    }
-    probes.value = Array.isArray(probeData?.items) ? probeData.items : []
-    probeUpdatedAt.value = probeData?.updated_at ?? null
+    detail.value = await adminApi.client(clientId.value)
   } catch (err) {
     error.value = getErrorMessage(err, '客户端详情加载失败')
   } finally {
     loading.value = false
-  }
-}
-
-function openGuardEditor(selectedId = ''): void {
-  guardEditorSelected.value = selectedId
-  guardEditorOpen.value = true
-}
-
-async function handleGuardSave(payload: GuardDefinition[]) {
-  if (guardSaving.value || !clientId.value) return
-  guardSaving.value = true
-  try {
-    const result = await adminApi.saveClientGuards(clientId.value, payload)
-    guardConfig.value = result.items
-    guardManaged.value = result.managed
-    guardEditorOpen.value = false
-    ElMessage.success('守护项配置已下发，客户端将在下次配置轮询时生效')
-  } catch (err) {
-    ElMessage.error(getErrorMessage(err, '下发失败，请检查配置'))
-  } finally {
-    guardSaving.value = false
-  }
-}
-
-async function handleCheckSave(payload: CheckDefinition[]) {
-  if (checkSaving.value || !clientId.value) return
-  checkSaving.value = true
-  try {
-    const result = await adminApi.saveClientChecks(clientId.value, payload)
-    checkConfig.value = result.items
-    checkManaged.value = result.managed
-    checkEditorOpen.value = false
-    ElMessage.success('检测项配置已下发，客户端将在下次配置轮询时生效')
-  } catch (err) {
-    ElMessage.error(getErrorMessage(err, '下发失败，请检查检测项引用与依赖'))
-  } finally {
-    checkSaving.value = false
-  }
-}
-
-async function clearCheckConfig() {
-  if (!clientId.value) return
-  try {
-    await ElMessageBox.confirm(
-      '清除检测项会同时清除引用它们的守护项下发配置，客户端将回退本地配置，确定继续？',
-      '清除服务端配置',
-      { type: 'warning', confirmButtonText: '清除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    if (guardManaged.value) {
-      const result = await adminApi.clearClientGuards(clientId.value)
-      guardConfig.value = []
-      guardManaged.value = result.managed
-    }
-    const result = await adminApi.saveClientChecks(clientId.value, [])
-    checkConfig.value = []
-    checkManaged.value = result.managed
-    ElMessage.success('已清除服务端检测项与守护项配置')
-  } catch (err) {
-    ElMessage.error(getErrorMessage(err, '清除失败'))
-  }
-}
-
-async function clearGuardConfig() {
-  if (!clientId.value) return
-  try {
-    await ElMessageBox.confirm(
-      '清除后客户端将回退到本地守护项配置，确定继续？',
-      '清除服务端下发',
-      { type: 'warning', confirmButtonText: '清除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  try {
-    const result = await adminApi.clearClientGuards(clientId.value)
-    guardConfig.value = []
-    guardManaged.value = result.managed
-    ElMessage.success('已清除服务端下发配置')
-  } catch (err) {
-    ElMessage.error(getErrorMessage(err, '清除失败'))
   }
 }
 
@@ -404,41 +232,15 @@ async function copyRotatedSecret() {
         <div class="panel-head">
           <span class="panel-title">检测项</span>
           <div class="panel-actions">
-            <el-tag v-if="checkManaged" size="small" type="success">已下发</el-tag>
-            <el-tag v-else-if="checkRows.length" size="small" type="info">本地配置</el-tag>
-            <el-tag v-else size="small" type="info">未下发</el-tag>
-            <el-button size="small" type="primary" @click="checkEditorOpen = true">
-              编辑配置
-            </el-button>
-            <el-button
-              v-if="checkManaged"
-              size="small"
-              text
-              type="danger"
-              @click="clearCheckConfig"
-            >
-              清除下发
-            </el-button>
+            <el-tag size="small" type="info">客户端上报</el-tag>
           </div>
         </div>
-        <el-alert
-          v-if="checkError"
-          class="check-error"
-          type="error"
-          show-icon
-          :closable="false"
-          :title="checkError"
-        >
-          <el-button size="small" text type="primary" @click="load">重试</el-button>
-        </el-alert>
         <div class="panel-body panel-body--flush">
           <el-table :data="checkRows" size="small">
             <el-table-column label="名称" min-width="150">
               <template #default="{ row }">
                 <span>{{ row.name || row.id }}</span>
-                <el-tag v-if="row.local" size="small" type="info">本地</el-tag>
-                <el-tag v-if="row.enabled === false" size="small" type="info">停用</el-tag>
-                <el-tag v-if="row.probe_missing" size="small" type="danger">probe 缺失</el-tag>
+                <el-tag v-if="row.status === 'skipped'" size="small" type="info">跳过</el-tag>
               </template>
             </el-table-column>
             <el-table-column label="ID" width="150">
@@ -461,13 +263,6 @@ async function copyRotatedSecret() {
                 <span class="mono">{{ formatLatency(row.latency_ms) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="依赖" width="130">
-              <template #default="{ row }">
-                <span class="mono muted">
-                  {{ (row.depends_on ?? []).join(', ') || '—' }}
-                </span>
-              </template>
-            </el-table-column>
             <el-table-column label="证据" min-width="200">
               <template #default="{ row }">
                 <span class="evidence">{{ evidenceText(row.evidence) }}</span>
@@ -476,28 +271,15 @@ async function copyRotatedSecret() {
             <template #empty>
               <EmptyState
                 compact
-                title="未下发检测项配置"
-                description="客户端当前使用本地检测项；点击“编辑配置”创建并整表下发。"
-              >
-                <template #action>
-                  <el-button size="small" @click="checkEditorOpen = true">新建检测项</el-button>
-                </template>
-              </EmptyState>
+                title="暂无检测项数据"
+                description="等待客户端心跳上报检测项结果；检测项由客户端本地配置与管理。"
+              />
             </template>
           </el-table>
         </div>
         <div class="panel-body">
           <p class="muted check-hint">
-            <template v-if="probes.length">
-              探测器目录来自最近一次心跳（{{ probes.length }} 项，更新于
-              <TimeText :value="probeUpdatedAt" />）。检测项只能引用 remote_allowed 的探测器。
-            </template>
-            <template v-else>
-              客户端尚未上报探测器目录；请确认心跳正常后再配置检测项。
-            </template>
-            <template v-if="!checkManaged && checkRows.length">
-              当前为客户端本地配置，参数不会自动带入，编辑保存前请核对。
-            </template>
+            检测项由客户端本地配置与管理，服务端仅展示最近一次心跳上报的状态与证据。
           </p>
         </div>
       </div>
@@ -544,93 +326,9 @@ async function copyRotatedSecret() {
             </template>
           </el-table>
         </div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-head">
-          <span class="panel-title">守护项配置（下发）</span>
-          <div class="panel-actions">
-            <el-tag v-if="guardManaged" size="small" type="success">已下发</el-tag>
-            <el-tag v-else size="small" type="info">未下发</el-tag>
-            <el-button
-              size="small"
-              type="primary"
-              :disabled="!checkConfig.length"
-              @click="openGuardEditor('')"
-            >
-              编辑配置
-            </el-button>
-            <el-button
-              v-if="guardManaged"
-              size="small"
-              text
-              type="danger"
-              @click="clearGuardConfig"
-            >
-              清除下发
-            </el-button>
-          </div>
-        </div>
-        <el-alert
-          v-if="guardError"
-          class="guard-error"
-          type="error"
-          show-icon
-          :closable="false"
-          :title="guardError"
-        >
-          <el-button size="small" text type="primary" @click="load">重试</el-button>
-        </el-alert>
-        <div class="panel-body panel-body--flush">
-          <el-table :data="guardConfig" size="small">
-            <el-table-column label="名称" min-width="160">
-              <template #default="{ row }">
-                <span>{{ row.name || row.id }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="模板" width="120">
-              <template #default="{ row }">
-                <span class="mono muted">{{ row.template || '—' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="启用" width="80">
-              <template #default="{ row }">
-                <StatusTag
-                  :status="row.enabled === false ? 'DISABLED' : 'OK'"
-                  :label="row.enabled === false ? '停用' : '启用'"
-                  size="sm"
-                />
-              </template>
-            </el-table-column>
-            <el-table-column label="检测项" width="90">
-              <template #default="{ row }">
-                <span class="mono">{{ (row.check_refs ?? []).length }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="触发阈值" width="130">
-              <template #default="{ row }">
-                <span class="mono">
-                  {{ row.policy?.fail_threshold ?? 2 }} 次 / {{ row.policy?.interval ?? 30 }}s
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column label="恢复动作" width="100">
-              <template #default="{ row }">
-                <span class="mono">{{ (row.recovery ?? []).length }}</span>
-              </template>
-            </el-table-column>
-            <template #empty>
-              <EmptyState
-                compact
-                title="未下发守护项配置"
-                description="客户端将使用本地 config.json 中的守护项；点击“编辑配置”可创建并下发。"
-              />
-            </template>
-          </el-table>
-        </div>
         <div class="panel-body">
           <p class="muted guard-hint">
-            守护项只能引用上方已保存的检测项；保存后客户端在下一次配置轮询（默认 ≤ 5 分钟）自动生效。
+            守护项由客户端本地配置与管理，服务端仅展示最近一次心跳上报的快照。
           </p>
         </div>
       </div>
@@ -726,25 +424,6 @@ async function copyRotatedSecret() {
         </div>
       </div>
     </template>
-
-    <CheckEditor
-      v-model="checkEditorOpen"
-      :checks="checkEditorSeed"
-      :probes="probes"
-      :busy="checkSaving"
-      @save="handleCheckSave"
-    />
-
-    <GuardEditor
-      v-model="guardEditorOpen"
-      :guards="guardConfig"
-      :checks="checkConfig"
-      :busy="guardSaving"
-      :selected-id="guardEditorSelected"
-      title="配置下发守护项"
-      hint="引用上方检测项；保存后写入服务端并通过 /api/v1/config 下发，客户端本地配置将变为只读。"
-      @save="handleGuardSave"
-    />
 
     <el-dialog
       v-model="secretDialogOpen"

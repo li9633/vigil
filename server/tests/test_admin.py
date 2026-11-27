@@ -234,16 +234,11 @@ def test_admin_audit_list_filter_and_export(
     client: TestClient, registered: dict[str, Any]
 ) -> None:
     assert _login(client).status_code == 200
-    # 清除守护项配置会产生一条 guards_clear 审计
-    assert client.delete(
-        f"/api/v1/admin/clients/{registered['client_id']}/guards"
-    ).status_code == 200
 
     data = client.get("/api/v1/admin/audit").json()["data"]
     actions = [item["action"] for item in data["items"]]
-    assert data["total"] >= 2
+    assert data["total"] >= 1
     assert "login" in actions
-    assert "guards_clear" in actions
     assert data["items"][0]["ts"].endswith("Z")
 
     filtered = client.get("/api/v1/admin/audit", params={"action": "login"}).json()["data"]

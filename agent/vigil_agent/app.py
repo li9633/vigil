@@ -39,7 +39,7 @@ from .probes.builtin import builtin_registry
 from .probes.loader import DEFAULT_PROBES_DIR, LocalProbeStore
 from .runtime import RuntimeState, Watchdog, prepare_storage
 from .scheduler import IntervalScheduler
-from .services import guard_service, uplink, views
+from .services import check_service, guard_service, uplink, views
 from .spool import EventSpool
 from .transport import Transport
 
@@ -533,6 +533,10 @@ class AgentApp:
     def api_checks(self):
         return views.build_checks(self)
 
+    def api_checks_update(self, checks):
+        check_service.update_local_checks(self, checks)
+        return self.api_checks()
+
     def api_probes(self):
         return views.build_probes(self)
 
@@ -756,6 +760,7 @@ class AgentApp:
                 self.config["storage"].get("www_root", "/usr/share/vigil/www"),
                 status_provider=self.api_status,
                 checks_provider=self.api_checks,
+                checks_handler=self.api_checks_update,
                 events_provider=self.api_events,
                 logs_provider=self.api_logs,
                 logs_export_provider=self.api_logs_export,

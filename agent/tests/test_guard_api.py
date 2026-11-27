@@ -269,11 +269,14 @@ class HttpGuardApiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.put_calls = []
+        self.check_put_calls = []
         self.server = create_server(
             "127.0.0.1",
             0,
             "admin-token",
             os.path.join(self.tmp.name, "www"),
+            checks_provider=self._checks_provider,
+            checks_handler=self._checks_handler,
             guards_provider=self._guards_provider,
             guards_handler=self._guards_handler,
         )
@@ -295,6 +298,15 @@ class HttpGuardApiTest(unittest.TestCase):
 
     def _guards_provider(self):
         return {"items": [{"id": "g1"}], "source": "local", "editable": True}
+
+    def _checks_provider(self):
+        return [{"id": "check-1"}]
+
+    def _checks_handler(self, checks):
+        self.check_put_calls.append(copy.deepcopy(checks))
+        if any(item.get("name") == "bad" for item in checks if isinstance(item, dict)):
+            raise ValueError("检测项配置非法")
+        return checks
 
     def _guards_handler(self, guards):
         self.put_calls.append(copy.deepcopy(guards))
@@ -349,6 +361,24 @@ class HttpGuardApiTest(unittest.TestCase):
         self.assertEqual(payload["items"], [{"id": "g1"}])
         self.assertEqual(payload["source"], "local")
         self.assertTrue(payload["editable"])
+
+    def test_put_checks_passes_to_handler(self):
+        cookie = self.login()
+        checks = [{"id": "check-1", "name": "检测项"}]
+        status, payload, _set_cookie = self.request(
+            "PUT", "/api/checks", body={"checks": checks}, cookie=cookie
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload, checks)
+        self.assertEqual(self.check_put_calls, [checks])
+
+    def test_put_checks_invalid_returns_400(self):
+        cookie = self.login()
+        status, payload, _set_cookie = self.request(
+            "PUT", "/api/checks", body={"checks": [{"id": "c1", "name": "bad"}]}, cookie=cookie
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "检测项配置非法")
 
     def test_put_requires_auth(self):
         status, _payload, _set_cookie = self.request(

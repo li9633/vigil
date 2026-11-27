@@ -88,10 +88,8 @@ const error = ref('')
 const current = computed<CheckDraft | null>(() => draft.value[selected.value] ?? null)
 
 const probeMap = computed(() => new Map(props.probes.map((probe) => [probe.id, probe])))
-const remoteProbes = computed(() =>
-  [...props.probes]
-    .filter((probe) => probe.remote_allowed)
-    .sort((a, b) => a.id.localeCompare(b.id)),
+const availableProbes = computed(() =>
+  [...props.probes].sort((a, b) => a.id.localeCompare(b.id)),
 )
 
 function genSuffix(): string {
@@ -181,7 +179,7 @@ function close(): void {
 }
 
 function addCheck(): void {
-  const probe = remoteProbes.value[0] ?? null
+  const probe = availableProbes.value[0] ?? null
   const defaults = defaultParams(probe)
   const draftItem: CheckDraft = {
     id: uniqueId('new-check'),
@@ -364,9 +362,6 @@ function buildPayload(): CheckDefinition[] {
 
     const probe = probeMap.value.get(check.probe)
     if (!probe) errors.push(`${label}：探测器不存在（${check.probe}）`)
-    else if (!probe.remote_allowed) {
-      errors.push(`${label}：探测器 ${check.probe} 不允许服务端引用`)
-    }
 
     const params: Record<string, unknown> = {}
     for (const [name, spec] of Object.entries(paramsSchemaOf(check))) {
@@ -454,7 +449,7 @@ function submit(): void {
           <div>
             <h3 class="check-dialog__title">编辑检测项</h3>
             <p class="check-dialog__hint">
-              仅可引用客户端已上报且 remote_allowed 的探测器；保存后整表下发。
+              仅可引用客户端已安装的探测器；保存后本地立即生效。
             </p>
           </div>
           <button class="icon-btn" type="button" aria-label="关闭" @click="close">×</button>
@@ -513,17 +508,17 @@ function submit(): void {
                     @change="changeProbe(current, ($event.target as HTMLSelectElement).value)"
                   >
                     <option
-                      v-for="probe in remoteProbes"
+                      v-for="probe in availableProbes"
                       :key="probe.id"
                       :value="probe.id"
                     >
                       {{ probe.id }} · {{ probe.name || '' }}
                     </option>
                     <option
-                      v-if="current.probe && !remoteProbes.some((probe) => probe.id === current.probe)"
+                      v-if="current.probe && !availableProbes.some((probe) => probe.id === current.probe)"
                       :value="current.probe"
                     >
-                      {{ current.probe }}（缺失或不可远程引用）
+                      {{ current.probe }}（缺失）
                     </option>
                   </select>
                 </label>

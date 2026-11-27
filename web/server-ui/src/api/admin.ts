@@ -1,4 +1,4 @@
-import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type AdminSystemSettings, type AuditQuery, type AuditResponse, type CheckDefinition, type Client, type ClientChecksResponse, type ClientDetail, type ClientGuardsResponse, type GuardDefinition, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type PolicyResponse, type PolicySettings, type ProbeCatalogResponse, type RotateSecretResponse, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
+import { api, getApiConfig, type AdminLoginRequest, type AdminLoginResponse, type AdminSystemSettings, type AuditQuery, type AuditResponse, type Client, type ClientDetail, type Incident, type ListResponse, type NotificationRecord, type NotificationSettings, type NotificationSettingsResponse, type NotificationTestResult, type Overview, type PolicyResponse, type PolicySettings, type RotateSecretResponse, type ServerLogEntry, type ServerLogQuery } from '@vigil/shared'
 
 export interface IncidentQuery {
   state?: string
@@ -17,28 +17,6 @@ export const adminApi = {
 
   client: (id: string) =>
     api.get<ClientDetail>(`/api/v1/admin/clients/${encodeURIComponent(id)}`),
-
-  clientGuards: (id: string) =>
-    api.get<ClientGuardsResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/guards`),
-
-  saveClientGuards: (id: string, guards: GuardDefinition[]) =>
-    api.put<ClientGuardsResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/guards`, {
-      guards,
-    }),
-
-  clearClientGuards: (id: string) =>
-    api.delete<ClientGuardsResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/guards`),
-
-  clientChecks: (id: string) =>
-    api.get<ClientChecksResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/checks`),
-
-  saveClientChecks: (id: string, checks: CheckDefinition[]) =>
-    api.put<ClientChecksResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/checks`, {
-      checks,
-    }),
-
-  clientProbes: (id: string) =>
-    api.get<ProbeCatalogResponse>(`/api/v1/admin/clients/${encodeURIComponent(id)}/probes`),
 
   incidents: (query: IncidentQuery = {}) =>
     api.get<ListResponse<Incident>>('/api/v1/admin/incidents', {

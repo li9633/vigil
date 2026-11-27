@@ -19,6 +19,7 @@ class VigilHTTPServer(ThreadingHTTPServer):
         www_root,
         status_provider=None,
         checks_provider=None,
+        checks_handler=None,
         events_provider=None,
         logs_provider=None,
         action_handler=None,
@@ -41,6 +42,7 @@ class VigilHTTPServer(ThreadingHTTPServer):
         self.www_root = www_root
         self.status_provider = status_provider
         self.checks_provider = checks_provider
+        self.checks_handler = checks_handler
         self.events_provider = events_provider
         self.logs_provider = logs_provider
         self.action_handler = action_handler
@@ -69,6 +71,7 @@ def create_server(
     www_root,
     status_provider=None,
     checks_provider=None,
+    checks_handler=None,
     events_provider=None,
     logs_provider=None,
     action_handler=None,
@@ -93,6 +96,7 @@ def create_server(
         www_root,
         status_provider=status_provider,
         checks_provider=checks_provider,
+        checks_handler=checks_handler,
         events_provider=events_provider,
         logs_provider=logs_provider,
         action_handler=action_handler,
