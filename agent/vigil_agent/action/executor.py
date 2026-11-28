@@ -1,9 +1,15 @@
 """L1 白名单动作执行器。
 
+两套相互独立的限制策略：
+- 自动恢复动作（Guard）：受全局开关、维护窗口、5 分钟冷却与每小时上限约束
+- 手动动作（Web 二次确认）：不受上述自动策略约束，仅做白名单/目标校验，
+  并用最小间隔防止连续高频点击
+
 规则（对应设计文档 3.4）：
 - 只允许 `ifup_wan` 与 `restart_service` 两个动作
 - `restart_service` 的服务名必须在白名单内，且做字符校验，禁止注入
-- 同一动作冷却 5 分钟，每小时最多 3 次
+- 自动动作同一动作冷却 5 分钟，每小时最多 3 次
+- 手动动作最小间隔 5 秒，避免重复提交
 - 冷却与计数持久化到 /overlay/vigil/state.json，重启不清零
 - 全局 flock，避免 API 与自动恢复并发执行
 - 动作后 20s 复检；无效则 120s 后重试一次，再复检
@@ -34,6 +40,7 @@ WHITELIST = {
 SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 HOUR_SECONDS = 3600
+MANUAL_MIN_INTERVAL_SECONDS = 5
 
 
 def _empty_state():
@@ -95,6 +102,7 @@ class ActionExecutor:
         self._sleep = sleep or time.sleep
         self.use_lock = use_lock
         self._state_lock = threading.RLock()
+        self._manual_last: dict[str, float] = {}
 
     # ---------- 状态文件 ----------
 
@@ -161,12 +169,17 @@ class ActionExecutor:
             return ["ifup", self.wan_interface]
         return ["/etc/init.d/%s" % target, "restart"]
 
-    def _validate(self, name, target):
-        """返回 (reason, message)，空字符串表示通过。"""
-        if not self.enabled:
-            return "disabled", "配置已禁用自动动作"
-        if self.max_level != "L1":
-            return "level_disabled", "当前动作等级已限制为 %s" % self.max_level
+    def _validate(self, name, target, manual=False):
+        """返回 (reason, message)，空字符串表示通过。
+
+        自动动作走完整的动作安全策略；手动动作用户已二次确认，
+        只保留白名单与目标合法性校验。
+        """
+        if not manual:
+            if not self.enabled:
+                return "disabled", "配置已禁用自动动作"
+            if self.max_level != "L1":
+                return "level_disabled", "当前动作等级已限制为 %s" % self.max_level
         if name not in WHITELIST:
             return "not_whitelisted", "动作不在白名单内：%s" % name
         if WHITELIST[name]["requires_target"]:
@@ -178,16 +191,45 @@ class ActionExecutor:
                 return "target_not_whitelisted", "服务不在白名单内：%s" % target
         return "", ""
 
+    def _manual_throttle(self, name, target):
+        """手动动作防连点：同一动作在最小间隔内只接受一次。"""
+        key = self._record_key(name, target)
+        now = float(self.now())
+        with self._state_lock:
+            last = self._manual_last.get(key, 0.0)
+            remaining = last + MANUAL_MIN_INTERVAL_SECONDS - now
+            if remaining > 0:
+                seconds = int(math.ceil(remaining))
+                return {
+                    "reason": "manual_throttled",
+                    "message": "操作过于频繁，请 %d 秒后再试" % seconds,
+                    "cooldown_remaining": seconds,
+                }
+            # 先占位再执行，避免并发请求同时通过防连点检查
+            self._manual_last[key] = now
+        return None
+
     # ---------- 执行 ----------
 
-    def execute(self, name, target=None, force=False):
-        """执行一次动作；force=True 时忽略冷却（用于动作后重试）。"""
+    def execute(self, name, target=None, force=False, manual=False):
+        """执行一次动作。
+
+        force=True 时忽略冷却（用于自动动作后的重试）；
+        manual=True 表示 Web 手动触发，不受自动动作安全策略约束，
+        但仍受白名单校验与防连点间隔限制。
+        """
         result = _new_result(name, target)
-        reason, message = self._validate(name, target)
+        reason, message = self._validate(name, target, manual=manual)
         if reason:
             result["reason"] = reason
             result["message"] = message
             return result
+
+        if manual:
+            throttled = self._manual_throttle(name, target)
+            if throttled is not None:
+                result.update(throttled)
+                return result
 
         lock = FileLock(self.lock_path) if self.use_lock else None
         if lock is not None and not lock.acquire():
@@ -200,9 +242,9 @@ class ActionExecutor:
                 now = float(self.now())
                 state = self._load_state()
 
-                if float(state.get("maintenance_until") or 0) > now:
+                if not manual and float(state.get("maintenance_until") or 0) > now:
                     result["reason"] = "maintenance"
-                    result["message"] = "处于维护窗口，禁止执行动作"
+                    result["message"] = "处于维护窗口，禁止执行自动动作"
                     result["cooldown_remaining"] = int(
                         math.ceil(float(state["maintenance_until"]) - now)
                     )
@@ -215,14 +257,14 @@ class ActionExecutor:
                 ]
                 result["hourly_used"] = len(recent)
 
-                if len(recent) >= self.max_per_hour:
+                if not manual and len(recent) >= self.max_per_hour:
                     result["reason"] = "hourly_limit"
                     result["message"] = "每小时动作次数已达上限（%d 次）" % self.max_per_hour
                     return result
 
                 last_run = float(record.get("last_run") or 0)
                 remaining = last_run + self.cooldown_seconds - now
-                if not force and remaining > 0:
+                if not manual and not force and remaining > 0:
                     result["reason"] = "cooldown"
                     result["message"] = "动作冷却中"
                     result["cooldown_remaining"] = int(math.ceil(remaining))

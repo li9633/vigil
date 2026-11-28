@@ -401,4 +401,4 @@ def expire_pairings(db: Session, settings: Settings, now: datetime | None = None
         )
     )
     db.commit()
-    return expired.rowcount or 0, removed.rowcount or 0
+    return getattr(expired, "rowcount", 0) or 0, getattr(removed, "rowcount", 0) or 0

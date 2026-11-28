@@ -7,6 +7,7 @@ import {
   RefreshFab,
   StatusTag,
   TimeText,
+  clientHealthLabel,
   getErrorMessage,
   unwrapList,
   usePolling,
@@ -21,18 +22,12 @@ const clients = ref<Client[]>([])
 const loading = ref(false)
 const error = ref('')
 const keyword = ref('')
-const stateFilter = ref('')
+const lifecycleFilter = ref('')
 
-const STATE_OPTIONS = [
-  'HEALTHY',
-  'SUSPECT',
-  'DOWN',
-  'AGENT_DOWN',
-  'HOST_OR_NET_DOWN',
-  'BEACON_DOWN',
-  'DEVICE_REBOOT',
-  'FLAPPING',
-  'UNKNOWN',
+const LIFECYCLE_OPTIONS = [
+  { value: 'ONLINE', label: '在线' },
+  { value: 'OFFLINE', label: '离线' },
+  { value: 'REVOKED', label: '已失效' },
 ]
 
 const filtered = computed(() => {
@@ -43,8 +38,8 @@ const filtered = computed(() => {
       .join(' ')
       .toLowerCase()
     const matchKeyword = !text || haystack.includes(text)
-    const matchState = !stateFilter.value || (client.state ?? 'UNKNOWN') === stateFilter.value
-    return matchKeyword && matchState
+    const matchLifecycle = !lifecycleFilter.value || client.lifecycle === lifecycleFilter.value
+    return matchKeyword && matchLifecycle
   })
 })
 
@@ -67,7 +62,7 @@ function openClient(row: Client) {
 
 function resetFilters() {
   keyword.value = ''
-  stateFilter.value = ''
+  lifecycleFilter.value = ''
 }
 
 const poll = usePolling(load, {
@@ -98,8 +93,13 @@ const stream = useServerStream({ onUpdate: () => poll.refresh() })
             placeholder="搜索名称 / ID / WAN IP"
             class="search-input"
           />
-          <el-select v-model="stateFilter" size="small" clearable placeholder="全部状态" class="state-select">
-            <el-option v-for="state in STATE_OPTIONS" :key="state" :label="state" :value="state" />
+          <el-select v-model="lifecycleFilter" size="small" clearable placeholder="全部连接状态" class="state-select">
+            <el-option
+              v-for="option in LIFECYCLE_OPTIONS"
+              :key="option.value"
+              :label="option.label"
+              :value="option.value"
+            />
           </el-select>
           <el-button size="small" text @click="resetFilters">重置</el-button>
         </div>
@@ -130,9 +130,14 @@ const stream = useServerStream({ onUpdate: () => poll.refresh() })
               <div class="mono muted">{{ row.client_id }}</div>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="120">
+          <el-table-column label="连接状态" width="110">
             <template #default="{ row }">
-              <StatusTag :status="row.state" />
+              <StatusTag :status="row.lifecycle" />
+            </template>
+          </el-table-column>
+          <el-table-column label="健康状态" width="110">
+            <template #default="{ row }">
+              <StatusTag :status="row.state" :label="clientHealthLabel(row.state)" />
             </template>
           </el-table-column>
           <el-table-column label="最后心跳" width="130">
@@ -153,7 +158,11 @@ const stream = useServerStream({ onUpdate: () => poll.refresh() })
           <el-table-column label="最近故障" min-width="220">
             <template #default="{ row }">
               <div v-if="row.last_incident" class="incident-cell">
-                <StatusTag :status="row.last_incident.state" size="sm" />
+                <StatusTag
+                  :status="row.last_incident.state"
+                  :label="clientHealthLabel(row.last_incident.state)"
+                  size="sm"
+                />
                 <span class="incident-text">{{ row.last_incident.summary || row.last_incident.category }}</span>
               </div>
               <span v-else class="muted">—</span>

@@ -24,6 +24,17 @@ class RegisterResponse(BaseModel):
     heartbeat_interval: int
 
 
+class UnregisterRequest(BaseModel):
+    """客户端主动取消注册，服务端仅记录原因并标记失效。"""
+
+    reason: str = Field(default="", max_length=255)
+
+
+class UnregisterResponse(BaseModel):
+    revoked_at: str
+    server_time: int
+
+
 class PairingStartRequest(BaseModel):
     """客户端发起配对：code 由客户端生成并展示，服务端只存 HMAC。"""
 

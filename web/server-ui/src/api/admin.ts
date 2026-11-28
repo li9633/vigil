@@ -18,6 +18,11 @@ export const adminApi = {
   client: (id: string) =>
     api.get<ClientDetail>(`/api/v1/admin/clients/${encodeURIComponent(id)}`),
 
+  deleteClient: (id: string) =>
+    api.delete<{ client_id: string; deleted: boolean }>(
+      `/api/v1/admin/clients/${encodeURIComponent(id)}`,
+    ),
+
   incidents: (query: IncidentQuery = {}) =>
     api.get<ListResponse<Incident>>('/api/v1/admin/incidents', {
       query: {

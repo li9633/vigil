@@ -10,6 +10,7 @@ import {
   type ClientStatusSnapshot,
   type ClientSettingsSnapshot,
   type ClientSettingsUpdate,
+  type ClientUnregisterResponse,
   type GuardConfigResponse,
   type GuardDefinition,
   type ListResponse,
@@ -68,6 +69,9 @@ export const clientApi = {
     api.post<ClientSettingsSnapshot>('/api/pairing/poll', {}, { timeoutMs: 20000 }),
 
   cancelPairing: () => api.delete<ClientSettingsSnapshot>('/api/pairing'),
+
+  unregister: () =>
+    api.post<ClientUnregisterResponse>('/api/unregister', {}, { timeoutMs: 20000 }),
 
   events: (limit = 100) => api.get<ListResponse<ClientEvent>>('/api/events', { query: { limit } }),
 

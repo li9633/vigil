@@ -89,6 +89,14 @@ def init_db() -> None:
             connection.execute(
                 text("ALTER TABLE clients ADD COLUMN probe_catalog_json TEXT DEFAULT '[]'")
             )
+        if "revoked_at" not in client_columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN revoked_at DATETIME")
+            )
+        if "revoked_reason" not in client_columns:
+            connection.execute(
+                text("ALTER TABLE clients ADD COLUMN revoked_reason VARCHAR(255)")
+            )
 
         incident_columns = {
             item["name"] for item in inspect(connection).get_columns("incidents")

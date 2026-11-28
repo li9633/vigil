@@ -35,7 +35,12 @@ class ClientSummary(BaseModel):
     wan_ip: str | None
     enabled: bool
     online: bool
+    # 连接生命周期：ONLINE / OFFLINE / REVOKED
+    lifecycle: str
+    # 健康状态：HEALTHY / SUSPECT / DOWN / UNKNOWN（与连接状态分开）
     state: str
+    revoked_at: str | None = None
+    revoked_reason: str | None = None
     last_incident: IncidentItem | None = None
     created_at: str | None
 
@@ -199,3 +204,8 @@ class PairingApproveRequest(BaseModel):
 
 class PairingDenyRequest(BaseModel):
     reason: str = Field(default="", max_length=255)
+
+
+class DeleteClientResponse(BaseModel):
+    client_id: str
+    deleted: bool

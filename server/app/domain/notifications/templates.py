@@ -176,15 +176,20 @@ def build_message(
         lines.extend(
             [
                 f"类别：{incident.category}",
+                f"故障原因（推断）：{ctx.get('cause_reason') or '-'}",
                 f"故障开始：{_fmt_time(incident.started_at)}",
                 f"恢复时间：{_fmt_time(incident.recovered_at)}",
                 f"持续时长：{_fmt_duration(duration)}",
             ]
         )
+        cause_evidence = ctx.get("cause_evidence") or []
+        if cause_evidence:
+            lines.append("原因证据：" + "；".join(str(item) for item in cause_evidence))
         recovered_by = (
             "服务端扫描" if ctx.get("recovered_by") == "server_scan" else "客户端心跳"
         )
         lines.append(f"恢复判定方：{recovered_by}")
+        lines.append(f"自愈情况：{ctx.get('self_heal_text') or '-'}")
         lines.extend(_format_actions(ctx.get("actions") or []))
         lines.append("是否重启：" + ("是" if ctx.get("boot_id_changed") else "否"))
         if ctx.get("wan_ip_changed"):

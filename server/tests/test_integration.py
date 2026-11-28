@@ -115,7 +115,8 @@ def test_full_client_and_admin_flow(
     assert len(clients) == 1
     listed = clients[0]
     assert listed["client_id"] == client_id
-    assert listed["state"] == "HEALTHY"
+    assert listed["lifecycle"] == "ONLINE"
+    assert listed["state"] == "DOWN"
     assert listed["last_incident"]["client_id"] == client_id
 
     detail = client.get(f"/api/v1/admin/clients/{client_id}").json()["data"]

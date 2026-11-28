@@ -19,6 +19,9 @@ export type ClientState =
   | 'DEVICE_REBOOT'
   | 'UNKNOWN'
 
+/** 客户端连接生命周期，与健康状态（state）独立 */
+export type ClientLifecycle = 'ONLINE' | 'OFFLINE' | 'REVOKED'
+
 /** 告警（incident）状态：服务端状态机使用 SUSPECT / DOWN / RECOVERED */
 export type IncidentState =
   | 'SUSPECT'
@@ -48,7 +51,10 @@ export interface Client {
   boot_id?: string | null
   wan_ip?: string | null
   enabled: boolean
+  lifecycle?: ClientLifecycle
   state?: ClientState
+  revoked_at?: string | null
+  revoked_reason?: string | null
   last_incident?: Incident | null
   created_at?: string | null
 }
@@ -685,6 +691,13 @@ export interface ClientPairingState {
   last_error: string
   client_id?: string
   server_url?: string
+}
+
+/** 客户端取消注册结果（POST /api/unregister） */
+export interface ClientUnregisterResponse {
+  settings: ClientSettingsSnapshot
+  server_notified: boolean
+  server_error: string
 }
 
 /** 客户端运行设置快照（GET /api/settings） */

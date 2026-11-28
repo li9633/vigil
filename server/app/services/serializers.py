@@ -34,9 +34,22 @@ def client_summary(
     last_incident: Incident | None = None,
 ) -> ClientSummary:
     online = (
-        client.last_seen is not None
+        client.enabled
+        and client.last_seen is not None
         and (now - client.last_seen).total_seconds() <= settings.suspect_seconds
     )
+    revoked = not client.enabled or client.revoked_at is not None
+    if revoked:
+        lifecycle = "REVOKED"
+        health = "UNKNOWN"
+    else:
+        lifecycle = "ONLINE" if online else "OFFLINE"
+        if last_incident is not None and last_incident.recovered_at is None:
+            health = last_incident.state
+        elif online:
+            health = "HEALTHY"
+        else:
+            health = "UNKNOWN"
     return ClientSummary(
         client_id=client.client_id,
         name=client.name,
@@ -49,7 +62,10 @@ def client_summary(
         wan_ip=client.wan_ip,
         enabled=client.enabled,
         online=online,
-        state="HEALTHY" if online else "DOWN",
+        lifecycle=lifecycle,
+        state=health,
+        revoked_at=iso_utc(client.revoked_at),
+        revoked_reason=client.revoked_reason,
         last_incident=incident_item(last_incident) if last_incident else None,
         created_at=iso_utc(client.created_at),
     )

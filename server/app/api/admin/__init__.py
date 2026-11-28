@@ -8,6 +8,7 @@ from app.api.admin import (
     audit,
     auth,
     checks,
+    clients,
     incidents,
     logs,
     notifications,
@@ -21,6 +22,7 @@ from app.api.admin import (
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 router.include_router(auth.router)
 router.include_router(reads.router)
+router.include_router(clients.router)
 router.include_router(incidents.router)
 router.include_router(checks.router)
 router.include_router(policies.router)

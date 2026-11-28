@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   EmptyState,
@@ -9,6 +9,7 @@ import {
   RefreshFab,
   StatusTag,
   TimeText,
+  clientHealthLabel,
   copyText,
   formatLatency,
   getErrorMessage,
@@ -20,6 +21,7 @@ import { adminApi } from '@/api/admin'
 import LatencyChart from '@/components/LatencyChart.vue'
 
 const route = useRoute()
+const router = useRouter()
 const clientId = computed(() => String(route.params.id ?? ''))
 
 const detail = ref<ClientDetail | null>(null)
@@ -139,6 +141,31 @@ async function copyRotatedSecret() {
   if (ok) ElMessage.success('已复制到剪贴板')
   else ElMessage.warning('复制失败，请手动选中复制')
 }
+
+const deleting = ref(false)
+
+async function deleteClient() {
+  if (!clientId.value || deleting.value) return
+  try {
+    await ElMessageBox.confirm(
+      `将彻底删除设备「${client.value?.name || clientId.value}」及其心跳、事件、告警、通知等全部历史数据，且不可恢复。确定继续？`,
+      '删除客户端',
+      { type: 'warning', confirmButtonText: '彻底删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  deleting.value = true
+  try {
+    await adminApi.deleteClient(clientId.value)
+    ElMessage.success('客户端已删除')
+    router.push({ name: 'clients' })
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '删除失败'))
+  } finally {
+    deleting.value = false
+  }
+}
 </script>
 
 <template>
@@ -148,7 +175,10 @@ async function copyRotatedSecret() {
         <router-link class="back-link" to="/clients">← 返回客户端列表</router-link>
         <h2 class="page-title detail-title">
           {{ client?.name || '客户端详情' }}
-          <StatusTag v-if="client" :status="client.state" />
+          <template v-if="client">
+            <StatusTag :status="client.lifecycle" />
+            <StatusTag :status="client.state" :label="clientHealthLabel(client.state)" size="sm" />
+          </template>
         </h2>
         <p class="page-sub mono">{{ clientId }}</p>
       </div>
@@ -183,8 +213,12 @@ async function copyRotatedSecret() {
         <div class="panel-body">
           <dl class="meta-grid">
             <div class="meta-item">
-              <dt>状态</dt>
-              <dd><StatusTag :status="client.state" /></dd>
+              <dt>连接状态</dt>
+              <dd><StatusTag :status="client.lifecycle" /></dd>
+            </div>
+            <div class="meta-item">
+              <dt>健康状态</dt>
+              <dd><StatusTag :status="client.state" :label="clientHealthLabel(client.state)" /></dd>
             </div>
             <div class="meta-item">
               <dt>WAN IP</dt>
@@ -209,6 +243,13 @@ async function copyRotatedSecret() {
             <div class="meta-item wide">
               <dt>boot_id</dt>
               <dd class="mono">{{ client.boot_id || '—' }}</dd>
+            </div>
+            <div v-if="client.revoked_at" class="meta-item wide">
+              <dt>失效时间</dt>
+              <dd>
+                <TimeText :value="client.revoked_at" mode="datetime" />
+                <span v-if="client.revoked_reason" class="muted"> · {{ client.revoked_reason }}</span>
+              </dd>
             </div>
           </dl>
         </div>
@@ -421,6 +462,20 @@ async function copyRotatedSecret() {
             </el-table-column>
             <el-table-column prop="exit_code" label="退出码" width="80" />
           </el-table>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <span class="panel-title">删除客户端</span>
+            <p class="panel-sub">
+              客户端取消注册后仅标记为失效；如需彻底清除，请在此删除设备及全部关联数据。
+            </p>
+          </div>
+          <el-button type="danger" plain size="small" :loading="deleting" @click="deleteClient">
+            删除客户端
+          </el-button>
         </div>
       </div>
     </template>

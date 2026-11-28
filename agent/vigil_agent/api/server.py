@@ -33,6 +33,7 @@ class VigilHTTPServer(ThreadingHTTPServer):
         pairing_start_handler=None,
         pairing_poll_handler=None,
         pairing_cancel_handler=None,
+        unregister_handler=None,
         logs_export_provider=None,
         probes_provider=None,
         probes_install_handler=None,
@@ -56,6 +57,7 @@ class VigilHTTPServer(ThreadingHTTPServer):
         self.pairing_start_handler = pairing_start_handler
         self.pairing_poll_handler = pairing_poll_handler
         self.pairing_cancel_handler = pairing_cancel_handler
+        self.unregister_handler = unregister_handler
         self.logs_export_provider = logs_export_provider
         self.probes_provider = probes_provider
         self.probes_install_handler = probes_install_handler
@@ -91,6 +93,7 @@ def create_server(
     pairing_start_handler=None,
     pairing_poll_handler=None,
     pairing_cancel_handler=None,
+    unregister_handler=None,
     logs_export_provider=None,
     probes_provider=None,
     probes_install_handler=None,
@@ -119,6 +122,7 @@ def create_server(
         pairing_start_handler=pairing_start_handler,
         pairing_poll_handler=pairing_poll_handler,
         pairing_cancel_handler=pairing_cancel_handler,
+        unregister_handler=unregister_handler,
         logs_export_provider=logs_export_provider,
         probes_provider=probes_provider,
         probes_install_handler=probes_install_handler,

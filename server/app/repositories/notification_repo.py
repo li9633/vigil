@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -168,17 +168,53 @@ def baseline_heartbeat(db: Session, incident: Incident) -> Heartbeat | None:
     return db.scalars(stmt).first()
 
 
-def action_events(db: Session, incident: Incident, limit: int) -> list[ClientEvent]:
-    """故障期间客户端上报的动作结果，用于恢复通知的动作链。"""
-    stmt = select(ClientEvent).where(
-        ClientEvent.client_id == incident.client_id,
-        ClientEvent.type == "action_result",
-        ClientEvent.received_at >= incident.started_at,
+def incident_events(
+    db: Session, incident: Incident, limit: int = 500
+) -> list[ClientEvent]:
+    """故障窗口内客户端补传的事件，用于归因与动作链。
+
+    事件的 `received_at` 是补传到达时间而非本地发生时间：断网期间产生的事件
+    要等恢复后才写入数据库。因此这里用 seq 边界圈定窗口——故障前最后一次心跳
+    的 seq 到恢复后第一次心跳的 seq，避免把恢复之后的新事件算进来。
+    缺少心跳边界时退回按到达时间过滤。
+    """
+    client_id = incident.client_id
+    start_seq = db.scalar(
+        select(Heartbeat.seq)
+        .where(
+            Heartbeat.client_id == client_id,
+            Heartbeat.received_at <= incident.started_at,
+        )
+        .order_by(Heartbeat.received_at.desc(), Heartbeat.id.desc())
+        .limit(1)
     )
-    if incident.guard_id:
-        stmt = stmt.where(ClientEvent.domain == incident.guard_id)
+    end_seq = None
+    if incident.recovered_at is not None:
+        end_seq = db.scalar(
+            select(Heartbeat.seq)
+            .where(
+                Heartbeat.client_id == client_id,
+                Heartbeat.received_at >= incident.recovered_at,
+            )
+            .order_by(Heartbeat.received_at.asc(), Heartbeat.id.asc())
+            .limit(1)
+        )
+
+    stmt = select(ClientEvent).where(ClientEvent.client_id == client_id)
+    if start_seq is not None:
+        stmt = stmt.where(ClientEvent.seq > start_seq)
+    else:
+        # 故障前心跳已被保留策略清理：退回到达时间下限，避免取到更早的历史事件
+        stmt = stmt.where(ClientEvent.received_at >= incident.started_at)
+    if end_seq is not None:
+        stmt = stmt.where(ClientEvent.seq <= end_seq)
+    elif incident.recovered_at is not None:
+        stmt = stmt.where(
+            ClientEvent.received_at <= incident.recovered_at + timedelta(minutes=10)
+        )
+
     return list(
         db.scalars(
-            stmt.order_by(ClientEvent.received_at.asc(), ClientEvent.id.asc()).limit(limit)
+            stmt.order_by(ClientEvent.seq.asc(), ClientEvent.id.asc()).limit(limit)
         ).all()
     )

@@ -604,6 +604,9 @@ class AgentApp:
         pairing_service.cancel(self)
         return views.build_settings(self)
 
+    def api_unregister(self):
+        return uplink.unregister(self)
+
     def api_settings_update(self, payload):
         parsed = views.parse_settings_update(payload)
         changed = []
@@ -673,7 +676,7 @@ class AgentApp:
         )
 
     def api_action(self, name, target=None):
-        result = self.executor.execute(name, target)
+        result = self.executor.execute(name, target, manual=True)
         self._record_event(
             "manual_action",
             "action",
@@ -789,6 +792,7 @@ class AgentApp:
                 pairing_start_handler=self.api_pairing_start,
                 pairing_poll_handler=self.api_pairing_poll,
                 pairing_cancel_handler=self.api_pairing_cancel,
+                unregister_handler=self.api_unregister,
                 probes_provider=self.api_probes,
                 probes_install_handler=self.api_probe_install,
                 probes_delete_handler=self.api_probe_delete,

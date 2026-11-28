@@ -11,7 +11,12 @@ from app.models import Client, Incident
 
 
 def count_clients(db: Session) -> int:
-    return db.scalar(select(func.count()).select_from(Client)) or 0
+    return (
+        db.scalar(
+            select(func.count()).select_from(Client).where(Client.enabled.is_(True))
+        )
+        or 0
+    )
 
 
 def count_online_clients(db: Session, since: datetime) -> int:
@@ -19,7 +24,11 @@ def count_online_clients(db: Session, since: datetime) -> int:
         db.scalar(
             select(func.count())
             .select_from(Client)
-            .where(Client.last_seen.is_not(None), Client.last_seen >= since)
+            .where(
+                Client.enabled.is_(True),
+                Client.last_seen.is_not(None),
+                Client.last_seen >= since,
+            )
         )
         or 0
     )

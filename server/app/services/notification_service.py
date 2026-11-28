@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.adapters.notifiers.factory import build_notifiers, target_for
 from app.db import utcnow
+from app.domain import incident_cause
 from app.domain.notifications import config as config_rules
 from app.domain.notifications import templates
 from app.domain.notifications.ports import NotificationMessage, Notifier, SendResult
@@ -72,29 +73,44 @@ def _message_context(
     raw_guard = evidence.get("guard")
     guard: dict[str, Any] = raw_guard if isinstance(raw_guard, dict) else {}
 
-    latest_guard: dict[str, Any] = {}
-    if incident.guard_id:
-        latest = notification_repo.latest_heartbeat(db, incident.client_id)
-        if latest is not None:
-            candidate = templates.load_json_object(latest.guards_json).get(incident.guard_id)
-            if isinstance(candidate, dict):
-                latest_guard = candidate
+    events = [
+        {
+            "type": row.type,
+            "domain": row.domain,
+            "payload": templates.load_json_object(row.payload_json),
+        }
+        for row in notification_repo.incident_events(db, incident)
+    ]
 
-    recovery_id = ""
-    for source in (latest_guard, guard):
-        value = str(source.get("last_recovery_id") or "")
-        if value:
-            recovery_id = value
-            break
-    if not recovery_id:
-        recovery_id = str(evidence.get("recovery_id") or "")
+    latest = notification_repo.latest_heartbeat(db, incident.client_id)
+    latest_guard: dict[str, Any] = {}
+    if incident.guard_id and latest is not None:
+        candidate = templates.load_json_object(latest.guards_json).get(incident.guard_id)
+        if isinstance(candidate, dict):
+            latest_guard = candidate
 
     baseline = notification_repo.baseline_heartbeat(db, incident)
     start_boot = (baseline.boot_id if baseline else "") or ""
     current_boot = (client.boot_id if client else None) or ""
     start_wan = (baseline.wan_ip if baseline else None) or ""
     current_wan = (client.wan_ip if client else None) or ""
-    actions = _recent_actions(db, incident)
+    boot_changed = bool(start_boot and current_boot and start_boot != current_boot)
+    wan_ip_changed = bool(start_wan and current_wan and start_wan != current_wan)
+
+    cause = incident_cause.assess_cause(
+        category=incident.category,
+        boot_changed=boot_changed,
+        wan_ip_changed=wan_ip_changed,
+        events=events,
+        current_uptime=latest.uptime if latest is not None else None,
+    )
+
+    recovery_id = cause.recovery_id or str(evidence.get("recovery_id") or "")
+    if not recovery_id and incident.guard_id:
+        # 守护项告警：最新心跳里的 recovery_id 与该 Guard 一一对应
+        recovery_id = str(latest_guard.get("last_recovery_id") or "")
+
+    actions = _recent_actions(events, incident.guard_id)
 
     return {
         "guard": guard,
@@ -102,28 +118,45 @@ def _message_context(
         "actions": actions,
         "recovery_id": recovery_id,
         "recovered_by": str(evidence.get("recovered_by") or ""),
-        "boot_id_changed": bool(start_boot and current_boot and start_boot != current_boot),
-        "wan_ip_changed": bool(start_wan and current_wan and start_wan != current_wan),
+        "boot_id_changed": boot_changed,
+        "wan_ip_changed": wan_ip_changed,
         "previous_wan_ip": start_wan,
         "current_wan_ip": current_wan,
+        "cause_reason": cause.reason,
+        "cause_evidence": list(cause.evidence),
+        "self_heal_text": cause.self_heal_text,
         "snippet": templates.evidence_snippet(guard, actions),
     }
 
 
-def _recent_actions(db: Session, incident: Incident) -> list[dict[str, Any]]:
+def _recent_actions(
+    events: list[dict[str, Any]], guard_id: str | None
+) -> list[dict[str, Any]]:
+    """只保留真正执行过的动作；被冷却/限流拒绝的记录已在自愈情况里汇总。"""
     actions: list[dict[str, Any]] = []
-    for row in notification_repo.action_events(db, incident, templates.MAX_ACTIONS):
-        payload = templates.load_json_object(row.payload_json)
+    for event in events:
+        if event.get("type") != "action_result":
+            continue
+        if guard_id and event.get("domain") != guard_id:
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        result = str(payload.get("result") or "")
+        if result not in incident_cause.EXECUTED_RESULTS:
+            continue
         actions.append(
             {
                 "action": str(payload.get("action") or "-"),
                 "target": str(payload.get("target") or ""),
-                "result": str(payload.get("result") or ""),
+                "result": result,
                 "exit_code": payload.get("exit_code"),
                 "latency_ms": payload.get("latency_ms"),
                 "output": payload.get("output"),
             }
         )
+        if len(actions) >= templates.MAX_ACTIONS:
+            break
     return actions
 
 

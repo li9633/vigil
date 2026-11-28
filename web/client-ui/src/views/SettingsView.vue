@@ -11,7 +11,7 @@ import {
   type ClientSettingsSnapshot,
   type ThemeMode,
 } from '@vigil/shared'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { clientApi } from '@/api/client'
 
 const data = ref<ClientSettingsSnapshot | null>(null)
@@ -19,6 +19,7 @@ const loading = ref(false)
 const saving = ref(false)
 const maintenanceBusy = ref(false)
 const pairingBusy = ref(false)
+const unregisterBusy = ref(false)
 const error = ref('')
 const pairing = ref<ClientPairingState | null>(null)
 const nowSeconds = ref(Math.floor(Date.now() / 1000))
@@ -133,6 +134,35 @@ async function cancelPairing() {
     ElMessage.error(getErrorMessage(err, '取消配对失败'))
   } finally {
     pairingBusy.value = false
+  }
+}
+
+async function unregister() {
+  if (unregisterBusy.value) return
+  try {
+    await ElMessageBox.confirm(
+      '取消后本地凭据会立即清除并停止上报；服务端会将该设备标记为失效，设备记录需要管理员在服务端手动删除。确定继续？',
+      '取消注册',
+      { type: 'warning', confirmButtonText: '取消注册', cancelButtonText: '返回' },
+    )
+  } catch {
+    return
+  }
+  unregisterBusy.value = true
+  try {
+    const result = await clientApi.unregister()
+    hydrate(result.settings)
+    if (result.server_notified) {
+      ElMessage.success('已取消注册')
+    } else {
+      ElMessage.warning(
+        `本地已取消注册，但服务端未确认：${result.server_error || '请管理员手动清理服务端记录'}`,
+      )
+    }
+  } catch (err) {
+    ElMessage.error(getErrorMessage(err, '取消注册失败'))
+  } finally {
+    unregisterBusy.value = false
   }
 }
 
@@ -420,6 +450,27 @@ onUnmounted(() => {
               取消维护
             </el-button>
           </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h3 class="panel-title">取消注册</h3>
+            <p class="panel-sub">
+              清除本地凭据并停止上报；服务端会将该设备标记为失效，记录需管理员在服务端手动删除
+            </p>
+          </div>
+          <el-button
+            type="danger"
+            plain
+            size="small"
+            :loading="unregisterBusy"
+            :disabled="!data.server.registered"
+            @click="unregister"
+          >
+            取消注册
+          </el-button>
         </div>
       </div>
 

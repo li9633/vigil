@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
+  ApiError,
   StatusTag,
   formatCountdown,
   getErrorMessage,
@@ -26,7 +27,8 @@ const ACTIONS: ActionOption[] = [
   },
 ]
 
-const DEFAULT_COOLDOWN_SECONDS = 300
+// 手动动作不受自动动作的冷却/每小时上限约束，只做最小间隔防连点
+const MANUAL_INTERVAL_SECONDS = 5
 
 const running = ref('')
 const cooldowns = reactive<Record<string, number>>({})
@@ -43,7 +45,7 @@ function isCooling(name: string): boolean {
 
 function buttonLabel(action: ActionOption): string {
   if (running.value === action.name) return '执行中…'
-  if (isCooling(action.name)) return `冷却中 ${formatCountdown(cooldowns[action.name])}`
+  if (isCooling(action.name)) return `请稍候 ${formatCountdown(cooldowns[action.name])}`
   return '执行'
 }
 
@@ -53,7 +55,7 @@ async function execute(action: ActionOption) {
   errors[action.name] = ''
   try {
     await ElMessageBox.confirm(
-      `${action.label}：${action.description}。执行后可能短时断网，且该动作有 5 分钟冷却，确认继续？`,
+      `${action.label}：${action.description}。执行后可能短时断网，确认继续？`,
       '二次确认',
       { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消' },
     )
@@ -65,11 +67,12 @@ async function execute(action: ActionOption) {
   try {
     const response = await clientApi.runAction(action.name, action.target)
     results[action.name] = response ?? {}
-    const cooldown =
-      response?.cooldown_remaining ?? response?.cooldown_seconds ?? DEFAULT_COOLDOWN_SECONDS
-    cooldowns[action.name] = Math.max(0, Math.round(Number(cooldown) || 0))
+    cooldowns[action.name] = MANUAL_INTERVAL_SECONDS
     ElMessage.success(response?.message || '动作已提交执行')
   } catch (err) {
+    const payload = err instanceof ApiError ? (err.payload as Record<string, unknown>) : undefined
+    const remaining = Math.max(0, Math.ceil(Number(payload?.cooldown_remaining) || 0))
+    if (remaining > 0) cooldowns[action.name] = remaining
     errors[action.name] = getErrorMessage(err, '动作执行失败')
     ElMessage.error(errors[action.name])
   } finally {
@@ -95,7 +98,7 @@ onBeforeUnmount(() => {
     <div class="page-head">
       <div>
         <h2 class="page-title">手动动作</h2>
-        <p class="page-sub">仅 L1 白名单动作，需二次确认；同一动作冷却 5 分钟</p>
+        <p class="page-sub">仅 L1 白名单动作，需二次确认；不受自动动作的冷却与每小时上限限制</p>
       </div>
     </div>
 
@@ -138,8 +141,7 @@ onBeforeUnmount(() => {
         <div class="result-head">
           <StatusTag :status="results[action.name]?.result || 'UNKNOWN'" size="sm" />
           <span class="muted">
-            退出码 {{ results[action.name]?.exit_code ?? '—' }} · 冷却
-            {{ cooldowns[action.name] ?? 0 }}s
+            退出码 {{ results[action.name]?.exit_code ?? '—' }}
           </span>
         </div>
         <pre v-if="results[action.name]?.output" class="result-output">{{ results[action.name]?.output }}</pre>
@@ -147,7 +149,7 @@ onBeforeUnmount(() => {
     </div>
 
     <p class="foot muted">
-      冷却与每小时次数由 agent 状态机控制，重复点击不会绕过限制。
+      自动恢复动作受冷却与每小时上限约束；手动操作不受该策略限制，但需二次确认并禁止连续高频点击。
     </p>
   </div>
 </template>

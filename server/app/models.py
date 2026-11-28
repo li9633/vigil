@@ -27,6 +27,9 @@ class Client(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 最近一次心跳上报的 probe 目录（只读缓存，不作为配置来源）
     probe_catalog_json: Mapped[str] = mapped_column(Text, default="[]")
+    # 客户端取消注册后标记失效，保留历史数据，等待管理员手动删除
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revoked_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 

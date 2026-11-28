@@ -33,6 +33,7 @@ const TONES: Record<string, UiStatusTone> = {
   GAVE_UP: 'critical',
   UNKNOWN: 'unknown',
   DISABLED: 'unknown',
+  REVOKED: 'unknown',
   SKIPPED: 'unknown',
   NOT_CONFIGURED: 'unknown',
 }
@@ -68,6 +69,7 @@ const LABELS: Record<string, string> = {
   HOST_OR_NET_DOWN: '主机或网络中断',
   UNKNOWN: '未知',
   DISABLED: '已禁用',
+  REVOKED: '已失效',
   SKIPPED: '已跳过',
   NOT_CONFIGURED: '未配置',
 }
@@ -81,6 +83,20 @@ export function statusLabel(value: string | null | undefined): string {
   if (!value) return '未知'
   const key = String(value).toUpperCase()
   return LABELS[key] ?? String(value)
+}
+
+const CLIENT_HEALTH_LABELS: Record<string, string> = {
+  HEALTHY: '正常',
+  SUSPECT: '疑似异常',
+  DOWN: '故障',
+  RECOVERED: '已恢复',
+  UNKNOWN: '未知',
+}
+
+/** 客户端健康状态文案：与连接状态（在线/离线/已失效）区分 */
+export function clientHealthLabel(value: string | null | undefined): string {
+  if (!value) return '未知'
+  return CLIENT_HEALTH_LABELS[String(value).toUpperCase()] ?? String(value)
 }
 
 /** 布尔状态（如服务端连通性）→ ok/critical */

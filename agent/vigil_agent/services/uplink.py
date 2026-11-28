@@ -98,6 +98,45 @@ def ensure_registered(app):
     return False
 
 
+def unregister(app):
+    """取消注册：先尽力通知服务端，再无条件清除本地凭据。
+
+    服务端不可达时仍然完成本地取消，避免设备卡在已注册状态；
+    服务端记录由管理员后续手动删除。
+    """
+    notified = False
+    error = ""
+    if app.transport.is_registered:
+        result = app.transport.unregister()
+        status = result.get("status")
+        if result.get("ok") or status in (401, 403, 404):
+            notified = True
+        else:
+            error = str(result.get("error") or "服务端未确认取消注册")
+
+    server = app.config.setdefault("server", {})
+    server["client_id"] = ""
+    server["secret"] = ""
+    server["bootstrap_token"] = ""
+    app.transport.update_credentials("", "")
+    pairing_service.clear_state(app)
+    app._next_register_at = 0.0
+    app._persist_config(app.config)
+    app._record_event("agent_unregistered", "agent", {"server_notified": notified})
+    log_event(
+        "warn",
+        "client.unregister",
+        "客户端已取消注册",
+        server_notified=notified,
+        error=error,
+    )
+    return {
+        "settings": views.build_settings(app),
+        "server_notified": notified,
+        "server_error": error,
+    }
+
+
 def heartbeat_once(app):
     ensure_registered(app)
     if not app.transport.is_registered:

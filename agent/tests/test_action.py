@@ -176,6 +176,65 @@ class CooldownTest(ExecutorTestBase):
         self.assertEqual(stats["actions"]["ifup_wan"]["cooldown_remaining"], 200)
 
 
+class ManualActionTest(ExecutorTestBase):
+    def test_manual_bypasses_automatic_safety_policy(self):
+        executor = self.make_executor(
+            enabled=False,
+            max_level="L0",
+            cooldown_seconds=300,
+            max_per_hour=1,
+        )
+        executor.set_maintenance(600)
+
+        first = executor.execute("ifup_wan", manual=True)
+        self.assertTrue(first["allowed"])
+        self.assertTrue(first["executed"])
+
+        self.clock[0] += 10
+        auto = executor.execute("ifup_wan")
+        self.assertFalse(auto["allowed"])
+        self.assertEqual(auto["reason"], "disabled")
+
+    def test_manual_can_run_after_auto_quota_exhausted(self):
+        executor = self.make_executor(cooldown_seconds=0, max_per_hour=1)
+        self.assertTrue(executor.execute("ifup_wan")["executed"])
+        self.clock[0] += 10
+        self.assertEqual(executor.execute("ifup_wan")["reason"], "hourly_limit")
+
+        manual = executor.execute("ifup_wan", manual=True)
+        self.assertTrue(manual["allowed"])
+        self.assertTrue(manual["executed"])
+        self.assertEqual(len(self.runner.calls), 2)
+
+    def test_manual_throttle_blocks_rapid_repeat(self):
+        executor = self.make_executor()
+        first = executor.execute("ifup_wan", manual=True)
+        self.assertTrue(first["executed"])
+
+        self.clock[0] += 1
+        second = executor.execute("ifup_wan", manual=True)
+        self.assertFalse(second["allowed"])
+        self.assertEqual(second["reason"], "manual_throttled")
+        self.assertEqual(second["cooldown_remaining"], 4)
+        self.assertEqual(len(self.runner.calls), 1)
+
+        self.clock[0] += 4
+        third = executor.execute("ifup_wan", manual=True)
+        self.assertTrue(third["executed"])
+        self.assertEqual(len(self.runner.calls), 2)
+
+    def test_manual_still_enforces_whitelist_and_target(self):
+        executor = self.make_executor(enabled=False)
+        self.assertEqual(executor.execute("rm_rf", manual=True)["reason"], "not_whitelisted")
+        self.assertEqual(
+            executor.execute("restart_service", manual=True)["reason"], "target_required"
+        )
+        self.assertEqual(
+            executor.execute("restart_service", "network", manual=True)["reason"],
+            "target_not_whitelisted",
+        )
+
+
 class RecheckTest(ExecutorTestBase):
     def test_recheck_success_stops_after_one_attempt(self):
         executor = self.make_executor()

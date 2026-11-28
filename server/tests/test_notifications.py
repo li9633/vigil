@@ -718,7 +718,7 @@ def test_recovery_notification_includes_actions_reboot_and_snippet(
             ClientEvent(
                 client_id="cl_guard",
                 event_id="ev-action-1",
-                seq=1,
+                seq=2,
                 type="action_result",
                 domain="g-1",
                 payload_json=json.dumps(
@@ -1013,3 +1013,257 @@ def test_worker_dispatches_recovery_without_touched(
     with session_scope() as db:
         _dispatch_notifications(db, [], now)
     assert len(recorder.messages) == 1
+
+
+# --------------------------------------------------------------------------
+# 故障归因：区分「重启/恢复方式」与「故障原因」
+# --------------------------------------------------------------------------
+
+
+def _check_event(
+    check_id: str,
+    status: str,
+    reason: str = "",
+    *,
+    carrier: str | None = None,
+) -> dict[str, Any]:
+    observed: dict[str, Any] = {}
+    if carrier is not None:
+        observed = {"device": "eth0", "carrier": carrier, "up": carrier == "1"}
+    return {
+        "type": "check_status",
+        "domain": check_id,
+        "payload": {
+            "check_id": check_id,
+            "status": status,
+            "evidence": {"reason": reason, "observed": observed},
+        },
+    }
+
+
+def test_cause_reboot_with_link_down_points_at_power_loss() -> None:
+    from app.domain.incident_cause import assess_cause
+
+    cause = assess_cause(
+        category="host_or_net_down",
+        boot_changed=True,
+        wan_ip_changed=True,
+        current_uptime=137,
+        events=[
+            _check_event("wan-link", "critical", "carrier_down", carrier="0"),
+            _check_event("wan-link", "ok", "carrier_up", carrier="1"),
+            _check_event("pppoe-session", "ok", "pppoe_up"),
+        ],
+    )
+    assert cause.code == "device_reboot_link_down"
+    assert "同时断电" in cause.reason
+    assert any("boot_id 变化" in item and "137 秒" in item for item in cause.evidence)
+    assert any("carrier=0" in item for item in cause.evidence)
+    assert any("carrier=1" in item for item in cause.evidence)
+
+
+def test_cause_modem_only_outage_without_reboot() -> None:
+    from app.domain.incident_cause import assess_cause
+
+    cause = assess_cause(
+        category="host_or_net_down",
+        boot_changed=False,
+        wan_ip_changed=False,
+        events=[_check_event("wan-link", "critical", "carrier_down", carrier="0")],
+    )
+    assert cause.code == "wan_link_down"
+    assert "光猫断电" in cause.reason
+
+
+def test_cause_pppoe_and_upstream_and_agent_down() -> None:
+    from app.domain.incident_cause import assess_cause
+
+    pppoe = assess_cause(
+        category="host_or_net_down",
+        boot_changed=False,
+        wan_ip_changed=False,
+        events=[
+            _check_event("wan-link", "ok", "carrier_up", carrier="1"),
+            _check_event("pppoe-session", "critical", "pppoe_down"),
+        ],
+    )
+    assert pppoe.code == "pppoe_down"
+
+    upstream = assess_cause(
+        category="host_or_net_down",
+        boot_changed=False,
+        wan_ip_changed=False,
+        events=[
+            _check_event("wan-link", "ok", "carrier_up", carrier="1"),
+            _check_event("pppoe-session", "ok", "pppoe_up"),
+            _check_event("dns", "critical", "dns_failed"),
+            _check_event("http204", "critical", "http_failed"),
+        ],
+    )
+    assert upstream.code == "upstream_down"
+    assert "dns" in upstream.reason or "上游" in upstream.reason
+
+    agent = assess_cause(
+        category="agent_down",
+        boot_changed=False,
+        wan_ip_changed=False,
+        events=[],
+    )
+    assert agent.code == "agent_down"
+
+    unknown = assess_cause(
+        category="host_or_net_down",
+        boot_changed=False,
+        wan_ip_changed=False,
+        events=[],
+    )
+    assert unknown.code == "unknown"
+    assert "未留下可用证据" in unknown.reason
+
+
+def test_recovery_notification_separates_reboot_from_cause(
+    db_ready: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = utcnow()
+    started = now - timedelta(minutes=42)
+    recorder = RecordingNotifier()
+    monkeypatch.setattr(
+        "app.services.notification_service.build_notifiers", lambda config: [recorder]
+    )
+
+    with session_scope() as db:
+        db.add(
+            Client(
+                client_id="cl_power",
+                name="断电路由器",
+                secret_sha256="0" * 64,
+                last_seen=now,
+                last_beacon=now,
+                wan_ip="198.51.100.20",
+                boot_id="boot-new",
+            )
+        )
+        db.add(
+            Heartbeat(
+                client_id="cl_power",
+                received_at=started,
+                seq=100,
+                uptime=252391,
+                boot_id="boot-old",
+                wan_ip="203.0.113.10",
+            )
+        )
+        db.add(
+            Heartbeat(
+                client_id="cl_power",
+                received_at=now,
+                seq=200,
+                uptime=137,
+                boot_id="boot-new",
+                wan_ip="198.51.100.20",
+            )
+        )
+        incident = Incident(
+            client_id="cl_power",
+            category="host_or_net_down",
+            state="RECOVERED",
+            started_at=started,
+            detected_at=started + timedelta(seconds=97),
+            recovered_at=now,
+            notified_at=started + timedelta(minutes=2),
+            summary="host_or_net_down: 心跳缺失 2519s",
+            evidence_json="{}",
+        )
+        db.add(incident)
+        db.flush()
+        incident_id = incident.id
+        db.add_all(
+            [
+                ClientEvent(
+                    client_id="cl_power",
+                    event_id="ev-101",
+                    seq=101,
+                    type="check_status",
+                    domain="wan-link",
+                    payload_json=json.dumps(
+                        {
+                            "check_id": "wan-link",
+                            "status": "critical",
+                            "evidence": {
+                                "reason": "carrier_down",
+                                "observed": {"carrier": "0", "up": False},
+                            },
+                        }
+                    ),
+                    received_at=now,
+                ),
+                ClientEvent(
+                    client_id="cl_power",
+                    event_id="ev-102",
+                    seq=102,
+                    type="action_result",
+                    domain="g-1",
+                    payload_json=json.dumps(
+                        {"action": "ifup_wan", "result": "rejected", "reason": "cooldown"}
+                    ),
+                    received_at=now,
+                ),
+                ClientEvent(
+                    client_id="cl_power",
+                    event_id="ev-103",
+                    seq=103,
+                    type="guard_recovery",
+                    domain="g-1",
+                    payload_json=json.dumps(
+                        {
+                            "guard_id": "g-1",
+                            "recovered": False,
+                            "skipped": False,
+                            "recovery_id": "rec-failed",
+                        }
+                    ),
+                    received_at=now,
+                ),
+                ClientEvent(
+                    client_id="cl_power",
+                    event_id="ev-104",
+                    seq=104,
+                    type="check_status",
+                    domain="wan-link",
+                    payload_json=json.dumps(
+                        {
+                            "check_id": "wan-link",
+                            "status": "ok",
+                            "evidence": {
+                                "reason": "carrier_up",
+                                "observed": {"carrier": "1", "up": True},
+                            },
+                        }
+                    ),
+                    received_at=now,
+                ),
+                # 恢复后新产生的事件不应纳入故障窗口
+                ClientEvent(
+                    client_id="cl_power",
+                    event_id="ev-201",
+                    seq=201,
+                    type="config_received",
+                    domain="agent",
+                    payload_json="{}",
+                    received_at=now,
+                ),
+            ]
+        )
+
+    with session_scope() as db:
+        records = send_incident(db, db.get(Incident, incident_id), "recovery", now, CONFIG)
+        assert [record.status for record in records] == ["sent"]
+
+    body = recorder.messages[0].body
+    assert "故障原因（推断）：设备重启，且重启后 WAN 物理链路仍断开" in body
+    assert "原因证据：" in body
+    assert "carrier=0" in body
+    assert "自愈情况：本地自愈已执行 1 轮，但复检均未通过" in body
+    assert "动作链：无记录" in body
+    assert "recovery_id：-\n" in body or body.endswith("recovery_id：-")
+    assert "是否重启：是" in body

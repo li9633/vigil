@@ -236,7 +236,7 @@ def test_device_reboot_is_recorded(
     with session_scope() as db:
         incident = db.scalars(select(Incident)).one()
         assert incident.state == "RECOVERED"
-        assert "设备重启" in incident.summary
+        assert "设备已重启" in incident.summary
         reboot_events = db.scalars(
             select(ClientEvent).where(ClientEvent.type == "device_reboot")
         ).all()

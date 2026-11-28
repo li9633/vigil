@@ -344,6 +344,15 @@ class Transport:
             retries=1,
         )
 
+    def unregister(self):
+        """通知服务端取消注册；失败不重试，由本地先完成清理。"""
+        return self._request(
+            "POST",
+            "/api/v1/unregister",
+            body={"reason": "client_unregistered"},
+            retries=0,
+        )
+
     def beacon(self, seq, uptime, boot_id=None):
         error = self._require_registered()
         if error:

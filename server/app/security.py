@@ -168,7 +168,7 @@ def authenticate_client(
             "客户端凭证无效", headers={"WWW-Authenticate": "Bearer"}
         )
     if not client.enabled:
-        raise ForbiddenError("客户端已被禁用")
+        raise ForbiddenError("客户端已失效，请重新配对")
 
     consume_nonce(db, nonce, client.client_id, now)
     return client

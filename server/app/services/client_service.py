@@ -28,6 +28,8 @@ from app.schemas import (
     HeartbeatResponse,
     RegisterRequest,
     RegisterResponse,
+    UnregisterResponse,
+    iso_utc,
 )
 from app.security import (
     hash_secret,
@@ -82,6 +84,42 @@ def register_client(
         secret=secret,
         server_time=int(time.time()),
         heartbeat_interval=effective_settings(db, settings).heartbeat_interval,
+    )
+
+
+def unregister_client(
+    db: Session,
+    settings: Settings,
+    client: Client,
+    *,
+    reason: str = "",
+) -> UnregisterResponse:
+    """客户端主动取消注册：标记失效并关闭未恢复告警，保留历史供管理员删除。"""
+    now = utcnow()
+    if client.enabled:
+        effective = effective_settings(db, settings)
+        client.enabled = False
+        client.revoked_at = now
+        client.revoked_reason = (reason or "client_unregistered")[:255]
+        recover_incidents(
+            db,
+            client.client_id,
+            now,
+            note="客户端取消注册",
+            flapping_window_seconds=effective.flapping_window_seconds,
+            flapping_threshold=effective.flapping_threshold,
+        )
+        log_event(
+            "warn",
+            "client.unregister",
+            "客户端已取消注册并标记失效",
+            client_id=client.client_id,
+            reason=client.revoked_reason,
+        )
+    db.commit()
+    return UnregisterResponse(
+        revoked_at=iso_utc(client.revoked_at or now) or "",
+        server_time=int(time.time()),
     )
 
 
@@ -175,7 +213,7 @@ def record_heartbeat(
         db,
         client.client_id,
         now,
-        note="设备重启后恢复" if reboot_detected else "心跳恢复",
+        note="心跳恢复时检测到设备已重启" if reboot_detected else "心跳恢复",
         evidence=evidence,
         flapping_window_seconds=effective.flapping_window_seconds,
         flapping_threshold=effective.flapping_threshold,

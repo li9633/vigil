@@ -143,6 +143,9 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
         if method == "DELETE" and path == "/api/pairing":
             self._handle_pairing(self.server.pairing_cancel_handler)
             return
+        if method == "POST" and path == "/api/unregister":
+            self._handle_unregister()
+            return
 
         self._send_json(404, {"error": "not_found"})
 
@@ -302,6 +305,20 @@ class VigilRequestHandler(BaseHTTPRequestHandler):
             return
         except Exception:
             LOGGER.exception("配对操作失败")
+            self._send_json(500, {"error": "internal_error"})
+            return
+        self._send_json(200, payload)
+
+    def _handle_unregister(self):
+        """POST /api/unregister：取消注册并清除本地凭据。"""
+        handler = self.server.unregister_handler
+        if handler is None:
+            self._send_json(500, {"error": "取消注册未启用"})
+            return
+        try:
+            payload = handler()
+        except Exception:
+            LOGGER.exception("取消注册失败")
             self._send_json(500, {"error": "internal_error"})
             return
         self._send_json(200, payload)
