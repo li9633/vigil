@@ -4,6 +4,7 @@ import {
   LoadingBlock,
   StatusTag,
   TimeText,
+  copyText,
   getErrorMessage,
   useTheme,
   type ClientPairingState,
@@ -138,12 +139,11 @@ async function cancelPairing() {
 async function copyPairingCode() {
   const code = (pairing.value?.code || '').replace('-', '')
   if (!code) return
-  try {
-    await navigator.clipboard.writeText(code)
+  if (await copyText(code)) {
     ElMessage.success('配对码已复制')
-  } catch {
-    ElMessage.warning('复制失败，请手动选择配对码')
+    return
   }
+  ElMessage.warning('复制失败，请手动选择配对码')
 }
 
 async function load() {
